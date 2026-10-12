@@ -25,6 +25,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Author community platform
 - AI-powered reader feedback analysis
 
+## [1.2.0] - 2026-10-12
+
+### Fixed — AI layer (`scripts/multi_provider_ai_simple.sh`)
+
+- **Gemini ignored the system prompt.** `call_gemini_api` built the JSON payload
+	from the user prompt only (a `full_prompt` variable combined the two and was
+	never used), so every role/style/format instruction was silently dropped — most
+	visibly the "format chapters as `Chapter N: Title`" contract. The system prompt
+	is now sent in Gemini's dedicated `systemInstruction` field.
+- **No response cleanup anywhere.** Model chatter went straight into
+	`chapter_NN.md`: "Sure! Here is the chapter you asked for:", a wrapping
+	```markdown fence (rendered as a `<pre>` code block in EPUB/PDF), a duplicated
+	`# Chapter N` heading, "Word count: 412" and "I hope this helps!". New
+	`clean_ai_response` strips these from every provider and is applied to all text
+	handed back to callers, while preserving genuine code blocks in technical books.
+- **Originality scores were mis-parsed.** The check
+	`grep -E "(score|rating).*[8-9]|10"` matched any stray "10" in the reply, so a
+	chapter scoring 3/10 was reported as fully original. Scores are now extracted
+	numerically (`ORIGINALITY: <n>/10`, plus `n/10` / `n out of 10` fallbacks) with a
+	conservative "needs review" result when no score can be parsed.
+- **Empty responses counted as success.** `jq -e` succeeds on an empty body, so an
+	unreachable endpoint produced a "✓ Generated" message and empty text. Every
+	provider now requires non-empty output before reporting success.
+- **A failed rewrite destroyed the chapter.** `local result=$(smart_api_call …)`
+	followed by `[ $? -eq 0 ]` tested the exit status of `local`, so a failed rewrite
+	overwrote the chapter file with an empty string. The file is now only replaced by
+	a non-empty result.
+- **`SMART_API_PROVIDER` / `--provider` did nothing.** The flag was exported by
+	`generate_book.sh` and read nowhere; the provider is now honoured (strictly).
+- **Ollama ignored the token budget.** The request sent `max_tokens`, which the
+	Ollama API does not read; it now sends `num_predict`.
+- **`model_name` was used before it was assigned** in `call_ollama_api` (only the
+	fallback loop ever set it), so when the `ollama` CLI was absent every model check
+	compared against an empty string and context-window tuning silently did nothing.
+	The requested model is now the default, and the `ollama list` probing is skipped
+	when the CLI is missing.
+- Removed the `sed "s|$prompt||g"` prompt-echo hack: it broke on any prompt
+	containing regex characters, newlines or slashes — and could delete real prose.
+- The caller-supplied retry budget (`generate_appendices.sh` and
+	`generate_references.sh` pass 2) is no longer overwritten with 3.
+
+### Changed
+
+- **Prompts:** the outline prompt now asks for the exact chapter count and word
+	target (it hardcoded "12-15 chapters of 2,500-3,000 words" regardless of the
+	arguments) and for a machine-parseable `# Title` / `## Subtitle` /
+	`### Chapter N: Title` structure; chapter prompts state explicitly that only the
+	chapter body may be returned, and receive the tail of the previous chapter for
+	voice continuity.
+- **`generate_book.sh`:** chapter headings are extracted tolerantly (markdown,
+	bold and bulleted `Chapter N` lines, de-duplicated by number). An outline with no
+	usable chapter headings now aborts with the outline excerpt instead of writing
+	chapters titled "Chapter 1: Chapter 1". Failed chapters are counted and the run
+	aborts if every chapter failed.
+- **Output-token budget** for a chapter is derived from `--words-per-chapter`
+	(2×words, clamped to 4,096-8,192) so long chapters are no longer cut off
+	mid-sentence by a provider default.
+- **Fail fast:** an unreachable local Ollama is detected with a 2-second probe
+	instead of cycling through every known model (~20 s of noise per call).
+- **`compile_book.sh`:** the random pen-name default is gone. Compiling without
+	`--author` used to attribute the book to a stranger from a hardcoded list
+	("Elara Morgan"); the documented `AI-Assisted Author` default is kept.
+- **`compile_book.sh`:** outline discovery compares file names instead of full
+	paths. Any book directory whose name contained "final", "manuscript" or
+	"chapter_" (a topic such as "The Final Cut") had its own `outline.md` rejected,
+	so the export step failed with "No outline file found".
+- **`compile_book.sh`:** chapter labels use the numeric chapter number, so a
+	zero-padded file `chapter_01.md` now prints "Chapter 1" and finds its outline
+	title (previously the label was duplicated as "Chapter 01 Chapter 01" because the
+	`Chapter 1` outline lookup missed).
+
+### Added
+
+- `tests/ai_layer.bats` — 9 offline tests covering response cleanup, the Gemini
+	`systemInstruction` payload, Ollama's `num_predict`, empty-response handling,
+	provider pinning, originality-score parsing, the rewrite safety fix and outline
+	chapter extraction. `curl` is replaced with a shell function, so no network or
+	API key is needed (`bats tests/` → 19 tests).
+- `README.md` — new "How the AI Layer Behaves" section.
+
 ## [1.1.1] - 2026-10-12
 
 ### Fixed — compile stage (the orchestrator could not finish a book)

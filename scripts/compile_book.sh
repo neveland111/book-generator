@@ -162,44 +162,6 @@ EOF
     echo "$metadata_file"
 }
 
-# Function to generate a random author pen name from predefined list
-generate_author_pen_name() {
-    echo "🖋️ Selecting random author pen name..."
-    
-    # Use a predefined list of creative pen names
-    local pen_names=(
-        "Elara Morgan"
-        # "J.T. Blackwood"
-        # "Sophia Wyndham"
-        # "Xavier Stone"
-        # "Leo Hawthorne"
-        # "Isabella Quinn"
-        # "Nathaniel Grey"
-        # "Olivia Sterling"
-        # "Liam West"
-        # "Mia Rivers"
-        # "Noah Bennett"
-        # "Ava Sinclair"
-        # "Oliver James"
-        # "Charlotte Wells"
-        # "Jameson Blake"
-        # "Luna Rivers"
-        # "Ethan Cross"
-        # "Zoe Hart"
-        # "Mason Brooks"
-        # "Amelia Rivers"
-        # "Aiden Chase"
-        # "Jasper Knight"
-        # "Cassandra Vale"
-        # "Dahlia Black"
-    )
-    
-    # Select a random pen name from the list
-    local random_index=$((RANDOM % ${#pen_names[@]}))
-    AUTHOR="${pen_names[$random_index]}"
-    echo "✅ Selected author pen name: $AUTHOR"
-}
-
 # Function to generate a book cover using Ollama or ImageMagick
 generate_book_cover() {
     local title="$1"
@@ -628,16 +590,21 @@ OUTLINE_FILE=""
 
 # First, try to find book_outline_final_*.md files
 for file in "$BOOK_DIR"/book_outline_final_*.md; do
-    if [[ -f "$file" && "$file" != *"chapter_"* && "$file" != *"manuscript"* ]]; then
+    base="$(basename "$file")"
+    if [[ -f "$file" && "$base" != chapter_* && "$base" != *manuscript* ]]; then
         OUTLINE_FILE="$file"
         break
     fi
 done
 
-# If no final outline found, fallback to regular book_outline_*.md files
+# If no final outline found, fallback to regular book_outline_*.md files.
+# Compare the file NAME only: matching against the full path meant any book
+# directory whose name contained "final", "manuscript" or "chapter_" (for
+# example a topic called "Final Cut") had its own outline.md rejected.
 if [ -z "$OUTLINE_FILE" ]; then
     for file in "$BOOK_DIR"/book_outline_*.md "$BOOK_DIR"/outline.md "$BOOK_DIR"/*.md; do
-        if [[ -f "$file" && "$file" != *"chapter_"* && "$file" != *"manuscript"* && "$file" != *"final"* ]]; then
+        base="$(basename "$file")"
+        if [[ -f "$file" && "$base" != chapter_* && "$base" != *manuscript* && "$base" != *final* ]]; then
             OUTLINE_FILE="$file"
             break
         fi
@@ -832,12 +799,6 @@ fi
 COVER1_BASENAME="$(basename "$COVER1_SRC")"
 
 echo "📑 Creating manuscript: $(basename "$MANUSCRIPT_FILE")"
-
-# Generate random author pen name if requested
-if [ "$AUTHOR" = "AI-Assisted Author" ]; then
-    # We're using the default author name, so we can randomize it
-    generate_author_pen_name
-fi
 
 # Process cover image if provided
 if [ -n "$COVER_IMAGE" ] && [ -f "$COVER_IMAGE" ]; then
@@ -1037,7 +998,13 @@ for CHAPTER_FILE in "${CHAPTER_FILES[@]}"; do
     # Extract chapter number
     CHAPTER_NUM=$(basename "$CHAPTER_FILE" | sed -E 's/chapter_([0-9]+).*/\1/')
 
-    echo "📝 Processing Chapter $CHAPTER_NUM..."
+    # Chapter files are zero-padded (chapter_01.md) while outline headings are
+    # not ("Chapter 1"), so match titles on the numeric value and print labels
+    # without the padding ("Chapter 1", not "Chapter 01").
+    CHAPTER_NUM_INT="$CHAPTER_NUM"
+    [[ "$CHAPTER_NUM" =~ ^[0-9]+$ ]] && CHAPTER_NUM_INT=$((10#$CHAPTER_NUM))
+
+    echo "📝 Processing Chapter $CHAPTER_NUM_INT..."
 
     # Add chapter anchor and proper page break for ebook formats
     # For first chapter, don't add extra newpage since we're coming from TOC
@@ -1055,11 +1022,11 @@ for CHAPTER_FILE in "${CHAPTER_FILES[@]}"; do
 
     # Look up chapter display title from the outline to avoid duplicated titles
     # First try markdown format (### Chapter N: Title)
-    outline_line=$(grep -i -m1 -E "^###[[:space:]]+Chapter[[:space:]]+${CHAPTER_NUM}[:\. ]" "$OUTLINE_FILE" || true)
+    outline_line=$(grep -i -m1 -E "^###[[:space:]]+Chapter[[:space:]]+${CHAPTER_NUM_INT}[:\. ]" "$OUTLINE_FILE" || true)
     
     # If not found, try older formats
     if [ -z "$outline_line" ]; then
-        outline_line=$(grep -i -m1 -E "Chapter[[:space:]]+${CHAPTER_NUM}[:\. -]*.*" "$OUTLINE_FILE" || true)
+        outline_line=$(grep -i -m1 -E "Chapter[[:space:]]+${CHAPTER_NUM_INT}[:\. -]*.*" "$OUTLINE_FILE" || true)
     fi
     
     if [ -n "$outline_line" ]; then
@@ -1067,14 +1034,14 @@ for CHAPTER_FILE in "${CHAPTER_FILES[@]}"; do
         DISPLAY_TITLE=$(echo "$outline_line" | sed 's/^###[[:space:]]*//')
         
         # Then clean up the title
-        DISPLAY_TITLE=$(echo "$DISPLAY_TITLE" | sed -E 's/^[[:space:]]*[Cc]hapter[[:space:]]+'${CHAPTER_NUM}'[:\. -]*//; s/^[[:space:]]*'${CHAPTER_NUM}'[\.)[:space:]-]*//')
+        DISPLAY_TITLE=$(echo "$DISPLAY_TITLE" | sed -E 's/^[[:space:]]*[Cc]hapter[[:space:]]+'${CHAPTER_NUM_INT}'[:\. -]*//; s/^[[:space:]]*'${CHAPTER_NUM_INT}'[\.)[:space:]-]*//')
         DISPLAY_TITLE=$(echo "$DISPLAY_TITLE" | sed -E 's/^[[:space:]]*[Cc]hapter[[:space:]]*[0-9]+[:\. -]*//i; s/^[[:space:]]*[0-9]+[\.)[:space:]-]*//')
         DISPLAY_TITLE=$(echo "$DISPLAY_TITLE" | sed 's/^ *//; s/ *$//')
-        [ -z "$DISPLAY_TITLE" ] && DISPLAY_TITLE="Chapter ${CHAPTER_NUM}"
+        [ -z "$DISPLAY_TITLE" ] && DISPLAY_TITLE="Chapter ${CHAPTER_NUM_INT}"
     else
-        DISPLAY_TITLE="Chapter ${CHAPTER_NUM}"
+        DISPLAY_TITLE="Chapter ${CHAPTER_NUM_INT}"
     fi
-    CLEAN_CHAPTER_TITLE=$(echo "$DISPLAY_TITLE" | sed -e "s/^Chapter $CHAPTER_NUM: //; s/^Chapter $CHAPTER_NUM //")
+    CLEAN_CHAPTER_TITLE=$(echo "$DISPLAY_TITLE" | sed -e "s/^Chapter $CHAPTER_NUM_INT: //; s/^Chapter $CHAPTER_NUM_INT //")
 
     # Split chapter title at first colon to create H1/H2/H3 structure
     if [[ "$CLEAN_CHAPTER_TITLE" == *":"* ]]; then
@@ -1083,7 +1050,7 @@ for CHAPTER_FILE in "${CHAPTER_FILES[@]}"; do
         CHAPTER_SUBTITLE=$(echo "$CLEAN_CHAPTER_TITLE" | cut -d: -f2- | sed 's/^ *//; s/ *$//')
 
         # Use a single heading section for all title information
-        echo "# Chapter $CHAPTER_NUM {.chapter-title}" >> "$MANUSCRIPT_FILE"
+        echo "# Chapter $CHAPTER_NUM_INT {.chapter-title}" >> "$MANUSCRIPT_FILE"
         echo "## $CHAPTER_MAIN_TITLE {.chapter-main-title}" >> "$MANUSCRIPT_FILE"
         echo "" >> "$MANUSCRIPT_FILE"
         # H3: subtitle (optional)
@@ -1092,7 +1059,7 @@ for CHAPTER_FILE in "${CHAPTER_FILES[@]}"; do
         fi
     else
         # No colon found: Use CLEAN_CHAPTER_TITLE as the main title
-        echo "# Chapter $CHAPTER_NUM {.chapter-title}" >> "$MANUSCRIPT_FILE"
+        echo "# Chapter $CHAPTER_NUM_INT {.chapter-title}" >> "$MANUSCRIPT_FILE"
         echo "## $CLEAN_CHAPTER_TITLE {.chapter-main-title}" >> "$MANUSCRIPT_FILE"
     fi
     echo "" >> "$MANUSCRIPT_FILE"
@@ -1304,7 +1271,7 @@ for CHAPTER_FILE in "${CHAPTER_FILES[@]}"; do
     
     # Get clean chapter title (simplified)
     CHAPTER_TITLE=$(head -5 "$CHAPTER_FILE" | grep -E "^#|^\*\*" | head -1 | sed 's/^#\s*//; s/^\*\*\(.*\)\*\*$/\1/' | cut -c1-50)
-    [ -z "$CHAPTER_TITLE" ] && CHAPTER_TITLE="Chapter $CHAPTER_NUM"
+    [ -z "$CHAPTER_TITLE" ] && CHAPTER_TITLE="Chapter ${CHAPTER_NUM_INT:-$CHAPTER_NUM}"
     
     echo "- **Chapter $CHAPTER_NUM:** $CHAPTER_WORDS words - $CHAPTER_TITLE..." >> "$METADATA_STATS_FILE"
 done
@@ -1379,11 +1346,8 @@ $(if [ -f "$EXPORTS_DIR/$AUTHOR_PHOTO_BASENAME" ]; then echo "![]($AUTHOR_PHOTO_
 EOF
 fi
 
-# Liam West is a digital strategist, entrepreneur, and creator who has helped countless individuals and brands harness the power of micro-influence to grow their presence and monetize their passions. With years of experience navigating the ever-evolving landscape of social media and online business, Liam specializes in breaking down complex strategies into simple, actionable steps that anyone can follow.
 
-# Through his work, Liam has guided aspiring creators, small business owners, and niche influencers to build authentic brands, cultivate engaged communities, and create sustainable income streams online. His mission is to empower everyday people to realize that influence isn't about millions of followers—it's about making a meaningful impact within your niche.
 
-# When he's not writing, speaking, or coaching, Liam enjoys exploring new cities, sipping fine coffee, and finding inspiration in the stories of creators worldwide.
 
 # \includegraphics[width=0.5\\textwidth]{$AUTHOR_PHOTO_BASENAME}
 

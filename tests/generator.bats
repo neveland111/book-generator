@@ -80,6 +80,29 @@ EOF
     rm -rf "$tmp_dir"
 }
 
+@test "compile_book.sh finds the outline in a directory named with 'final'" {
+    command -v pandoc || skip "pandoc not installed"
+
+    # Topics like "Final Cut" produce directory names containing 'final', which
+    # used to make compile_book.sh reject the book's own outline.md.
+    tmp_dir=$(mktemp -d)
+    book_dir="$tmp_dir/20260101_the_final_cut"
+    mkdir -p "$book_dir"
+    cat > "$book_dir/outline.md" <<'EOF'
+# The Final Cut
+
+### Chapter 1: One
+EOF
+    printf '# Chapter 1: One\n\nBody.\n' > "$book_dir/chapter_01.md"
+
+    run ./scripts/compile_book.sh "$book_dir" epub 1 --author "Test Author"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Using outline: outline.md"* ]]
+    [[ "$output" != *"No outline file found"* ]]
+
+    rm -rf "$tmp_dir"
+}
+
 @test "compiled manuscript has no hardcoded placeholder content" {
     command -v pandoc || skip "pandoc not installed"
 

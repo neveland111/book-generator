@@ -16,6 +16,114 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 # ============================================================================
+# RESPONSE CLEANUP
+# ============================================================================
+
+# Strip the chat wrapper that models habitually add around book prose:
+#   "Sure! Here is the chapter you asked for:", ```markdown fences, a duplicate
+#   "Chapter N: Title" heading, "Word count: 412", "I hope this helps!".
+# Left in place, fences are rendered as <pre> code blocks in the EPUB/PDF and the
+# chatter ends up in print. Every line that belongs to the manuscript is kept,
+# including real code blocks inside technical chapters.
+clean_ai_response() {
+    awk '
+    function is_fence(line) {
+        return line ~ /^[[:space:]]*```[[:space:]]*[[:alnum:]+#-]*[[:space:]]*$/
+    }
+    function is_preamble(line,   l) {
+        if (length(line) > 200) return 0
+        if (line ~ /^[[:space:]]*#/) return 0
+        l = tolower(line)
+        gsub(/^[[:space:]]*[*_>`-]+[[:space:]]*/, "", l)
+        if (l ~ /^(sure|certainly|of course|absolutely|no problem|got it)[!,.]?[[:space:]]*$/) return 1
+        if (l ~ /^(sure|certainly|of course|absolutely|no problem|got it|here is|here'"'"'s|below is|the following is|this is)/) return 1
+        if (l ~ /^i('"'"'ll| will| have written|'"'"'ve written| am happy to| hope this)/) return 1
+        return 0
+    }
+    function is_trailing_meta(line,   l) {
+        l = tolower(line)
+        gsub(/^[[:space:]]*[*_>`()#-]+[[:space:]]*/, "", l)
+        gsub(/[[:space:]]*$/, "", l)
+        if (l ~ /^(word count|total words?|chapter length|approximate word count|this chapter is (approximately )?[0-9])[[:space:]:~-]/) return 1
+        if (l ~ /^(i hope (this|it) helps|let me know|would you like|feel free to|is there anything|happy to (revise|adjust)|end of chapter [0-9]+)/) return 1
+        if (l ~ /^\(?approximately [0-9,]+ words\)?$/) return 1
+        return 0
+    }
+    function norm_title(line,   t) {
+        t = line
+        gsub(/^[[:space:]]*#+[[:space:]]*/, "", t)
+        gsub(/^[[:space:]]*[*_]+/, "", t)
+        gsub(/[*_]+[[:space:]]*$/, "", t)
+        gsub(/[[:space:]]+/, " ", t)
+        return tolower(t)
+    }
+    { raw[++n] = $0 }
+    END {
+        start = 1
+        end = n
+
+        while (start < end && raw[start] ~ /^[[:space:]]*$/) start++
+        while (end > start && raw[end] ~ /^[[:space:]]*$/) end--
+
+        # Unwrap a fence that wraps the entire response
+        if (start < end && is_fence(raw[start]) && is_fence(raw[end])) {
+            start++
+            end--
+        }
+
+        # Drop leading chatter, blank lines and stray fences
+        while (start <= end) {
+            if (raw[start] ~ /^[[:space:]]*$/) { start++; continue }
+            if (is_preamble(raw[start])) { start++; continue }
+            if (is_fence(raw[start])) { start++; continue }
+            break
+        }
+
+        # Drop a "Chapter N: Title" heading — assemble/compile adds its own
+        if (start <= end && norm_title(raw[start]) ~ /^chapter[[:space:]]+[0-9]+/) {
+            title = norm_title(raw[start])
+            start++
+            while (start <= end && raw[start] ~ /^[[:space:]]*$/) start++
+            if (start <= end && norm_title(raw[start]) == title) start++
+        }
+
+        # Drop trailing chatter, meta lines and stray fences
+        while (end >= start) {
+            if (raw[end] ~ /^[[:space:]]*$/) { end--; continue }
+            if (is_trailing_meta(raw[end])) { end--; continue }
+            if (is_fence(raw[end])) { end--; continue }
+            break
+        }
+
+        blanks = 0
+        for (i = start; i <= end; i++) {
+            line = raw[i]
+            sub(/[[:space:]]+$/, "", line)
+            if (line ~ /^[[:space:]]*$/) {
+                blanks++
+                if (blanks > 1) continue
+                print ""
+            } else {
+                blanks = 0
+                print line
+            }
+        }
+    }
+    '
+}
+
+# ============================================================================
+# HELPERS
+# ============================================================================
+
+# Cheap connectivity probe so the pipeline fails fast (with one clear message)
+# instead of cycling through every known local model for ~20 seconds when
+# nothing is listening on the Ollama port.
+ollama_reachable() {
+    curl -s --max-time 2 -o /dev/null "http://localhost:11434/api/tags" 2>/dev/null
+}
+
+# ============================================================================
 # CORE FUNCTIONS
 # ============================================================================
 
@@ -123,137 +231,134 @@ setup_multi_provider_system() {
 }
 
 # Smart API call with task-specific model selection and fallbacks
+# Smart API call with task-specific model selection and fallbacks
 function smart_api_call() {
-    # Expected canonical call signature used across the project:
+    # Canonical call signature used across the project:
     # smart_api_call <prompt> <system_prompt> <task_type> <temperature> <max_tokens> <max_retries> <model>
+    local prompt="$1"           # User prompt
+    local system_prompt="$2"    # System prompt
+    local task_type="${3:-general}"
+    local temperature="${4:-0.7}"
+    local max_tokens="${5:-8192}"
+    local max_retries="${6:-3}"
+    local model="${7:-}"        # Optional: pin a specific model
 
-    local prompt="$1" # User prompt
-    local system_prompt="$2" # System prompt
-    local task_type="$3" # Task type
-    local temperature="$4" # Temperature
-    local max_tokens="$5" # Max tokens
-    local max_retries="$6" # Max retries
-    local model="$7" # Model
+    # Honour an explicitly requested provider (--provider / SMART_API_PROVIDER).
+    # generate_book.sh has always exported this, but nothing ever read it, so
+    # `--provider ollama` silently did nothing.
+    local provider_pref="${SMART_API_PROVIDER:-auto}"
+    case "$provider_pref" in
+        ""|auto) provider_pref="auto" ;;
+        gemini|groq|ollama) : ;;
+        *)
+            echo "⚠️ Unknown SMART_API_PROVIDER '$provider_pref' — using auto" >&2
+            provider_pref="auto"
+            ;;
+    esac
 
-    # Debug output (commented out to avoid including prompt in response)
-    # echo "$prompt $system_prompt $task_type $temperature $max_tokens $max_retries $model" >&2
-
-    # Default system prompt if none provided
-    local default_system_prompt="Be helpful, accurate, and clear."
-
-    # Known short task type tokens (used by callers when they omit system_prompt)
-    local TASK_TYPES=("analytical" "creative" "plagiarism_check" "chapter_rewrite" "rewrite" "quality_check" "outline" "continuation" "general" "rewrite" "plagiarism_check" "summary")
-
-    # Helper to check if a value is a known task type
-    is_task_type() {
-        local v="$1"
-        for t in "${TASK_TYPES[@]}"; do
-            if [ "$v" = "$t" ]; then
-                return 0
-            fi
-        done
-        return 1
-    }
-    
-    # Try to fetch a response with multiple fallback options
-    local success=false
-    local max_retries=3
-    local current_attempt=1
-    
-    # Prioritize faster/smaller models for better response times
-    # Start with fast small models and progress to larger ones if needed
-    local fallback_models=("llama3:8b" "llama3.2:1b" "llama3:latest" "gemma:7b" "tinyllama:latest" "mixtral:latest" "llama2:latest")
-    
-    # If model is specified, use it first, otherwise try default models
-    if [ -n "$model" ]; then
-        echo "🤖 Using specified model: $model" >&2
-        if [[ "$model" == gemini-* ]]; then
-            # Pin Gemini to this exact model by temporarily overriding the model array
-            local _old_gemini_models=("${GEMINI_MODELS[@]}")
-            local _old_gemini_index=$GEMINI_MODEL_INDEX
-            GEMINI_MODELS=("${model}:60")
-            GEMINI_MODEL_INDEX=0
-            if call_gemini_api "$prompt" "$system_prompt" "$temperature" "$max_tokens"; then
-                success=true
-            fi
-            GEMINI_MODELS=("${_old_gemini_models[@]}")
-            GEMINI_MODEL_INDEX=$_old_gemini_index
-        else
-            if call_ollama_api "$prompt" "$system_prompt" "$task_type" \
-                    "$temperature" "$max_tokens" "$max_retries" "$model"; then
-                success=true
-            fi
-        fi
-    fi
-
-    if [ -n "$GEMINI_API_KEY" ]; then
-        echo "🔄 Trying Gemini API (attempt $current_attempt/$max_retries)" >&2
-        if call_gemini_api "$prompt" "$system_prompt" "$temperature" "$max_tokens"; then
-            success=true
-        fi
-        sleep 1
-    fi
-
-    # Ensure values are numeric for comparison
-    if ! [[ "$current_attempt" =~ ^[0-9]+$ ]]; then
-        echo "⚠️ Invalid current_attempt value: $current_attempt, setting to 1" >&2
-        current_attempt=1
-    fi
-    
-    if ! [[ "$max_retries" =~ ^[0-9]+$ ]]; then
-        echo "⚠️ Invalid max_retries value: $max_retries, setting to 3" >&2
+    # Callers may pass their own retry budget (generate_appendices.sh and
+    # generate_references.sh pass 2); it used to be overwritten with 3.
+    if [ -z "$max_retries" ] || ! [[ "$max_retries" =~ ^[0-9]+$ ]]; then
         max_retries=3
     fi
-    
-    while [ "$success" = false ] && [ $current_attempt -le $max_retries ]; do
-        
-        # If still not successful, try Gemini
-        if [ "$success" = false ] && [ -n "$GEMINI_API_KEY" ]; then
-            echo "🔄 Trying Gemini API (attempt $current_attempt/$max_retries)" >&2
-            if call_gemini_api "$prompt" "$system_prompt" "$temperature" "$max_tokens"; then
-                success=true
-                break
+
+    local success=false
+    local output=""
+    local provider_used=""
+    local attempt
+    local fallback_models=("llama3:8b" "llama3.2:1b" "llama3:latest" "gemma:7b" "tinyllama:latest" "mixtral:latest" "llama2:latest")
+
+    for ((attempt = 1; attempt <= max_retries; attempt++)); do
+
+        # A caller-specified model pins this call to that exact model
+        if [ -n "$model" ]; then
+            echo "🤖 Using specified model: $model" >&2
+            if [[ "$model" == gemini-* ]]; then
+                if output=$(call_gemini_api "$prompt" "$system_prompt" "$temperature" "$max_tokens") \
+                        && [ -n "$output" ]; then
+                    success=true
+                    provider_used="Gemini/$model"
+                    break
+                fi
+            else
+                if output=$(call_ollama_api "$prompt" "$system_prompt" "$task_type" \
+                        "$temperature" "$max_tokens" "$max_retries" "$model") \
+                        && [ -n "$output" ]; then
+                    success=true
+                    provider_used="Ollama/$model"
+                    break
+                fi
             fi
-            sleep 1
         fi
 
-        if [ "$success" = false ] && [ "${#fallback_models[@]}" -gt 0 ]; then
-            # Try each fallback model in turn
-            for fallback_model in "${fallback_models[@]}"; do
-                echo "🔄 Trying fallback model: $fallback_model (attempt $current_attempt/$max_retries)" >&2
-                if call_ollama_api "$prompt" "$system_prompt" "$task_type" "$temperature" "$max_tokens" "$max_retries" "$fallback_model"; then
+        # Gemini (recommended provider, tried first)
+        if [ "$provider_pref" = "auto" ] || [ "$provider_pref" = "gemini" ]; then
+            if [ -n "${GEMINI_API_KEY:-}" ]; then
+                echo "🔄 Trying Gemini API (attempt $attempt/$max_retries)" >&2
+                if output=$(call_gemini_api "$prompt" "$system_prompt" "$temperature" "$max_tokens") \
+                        && [ -n "$output" ]; then
                     success=true
+                    provider_used="Gemini"
                     break
                 fi
                 sleep 1
-            done
+            elif [ "$provider_pref" = "gemini" ]; then
+                echo "⚠️ SMART_API_PROVIDER=gemini but GEMINI_API_KEY is not set" >&2
+            fi
         fi
 
-        # If still not successful, try Groq
-        if [ "$success" = false ] && [ -n "$GROQ_API_KEY" ]; then
-            echo "🔄 Trying Groq API (attempt $current_attempt/$max_retries)" >&2
-            if call_groq_api "$prompt" "$system_prompt" "$temperature" "$max_tokens"; then
-                success=true
-                break
+        # Local Ollama models
+        if [ "$provider_pref" = "auto" ] || [ "$provider_pref" = "ollama" ]; then
+            if ollama_reachable; then
+                for fallback_model in "${fallback_models[@]}"; do
+                    echo "🔄 Trying local Ollama model: $fallback_model (attempt $attempt/$max_retries)" >&2
+                    if output=$(call_ollama_api "$prompt" "$system_prompt" "$task_type" \
+                            "$temperature" "$max_tokens" "$max_retries" "$fallback_model") \
+                            && [ -n "$output" ]; then
+                        success=true
+                        provider_used="Ollama/$fallback_model"
+                        break
+                    fi
+                    sleep 1
+                done
+                [ "$success" = true ] && break
+            elif [ "$provider_pref" = "ollama" ]; then
+                echo "⚠️ SMART_API_PROVIDER=ollama but nothing answers at http://localhost:11434 (run 'ollama serve')" >&2
             fi
-            sleep 1
         fi
-        
-        # Increment attempt counter
-        current_attempt=$((current_attempt + 1))
-        
-        # If we're going to try again, wait a moment
-        if [ "$success" = false ] && [ $current_attempt -le $max_retries ]; then
+
+        # Groq (fallback)
+        if [ "$provider_pref" = "auto" ] || [ "$provider_pref" = "groq" ]; then
+            if [ -n "${GROQ_API_KEY:-}" ]; then
+                echo "🔄 Trying Groq API (attempt $attempt/$max_retries)" >&2
+                if output=$(call_groq_api "$prompt" "$system_prompt" "$temperature" "$max_tokens") \
+                        && [ -n "$output" ]; then
+                    success=true
+                    provider_used="Groq"
+                    break
+                fi
+                sleep 1
+            elif [ "$provider_pref" = "groq" ]; then
+                echo "⚠️ SMART_API_PROVIDER=groq but GROQ_API_KEY is not set" >&2
+            fi
+        fi
+
+        if [ "$success" = false ] && [ "$attempt" -lt "$max_retries" ]; then
             sleep 2
         fi
     done
-    
-    # If we couldn't get a response from any provider, return an error
-    if [ "$success" = false ]; then
-        echo "❌ All AI providers failed to respond after $max_retries attempts" >&2
+
+    if [ "$success" != true ] || [ -z "$output" ]; then
+        echo "❌ No AI provider returned usable text after $max_retries attempt(s)" >&2
+        echo "   Checked: GEMINI_API_KEY, GROQ_API_KEY, local Ollama at http://localhost:11434" >&2
+        echo "   Provider preference: $provider_pref" >&2
         return 1
     fi
-    
+
+    echo -e "${GREEN}✓ Generated with $provider_used${RESET}" >&2
+
+    # Hand back clean manuscript text (no chat preamble, fences or meta notes)
+    printf '%s\n' "$output" | clean_ai_response
     return 0
 }
 
@@ -346,28 +451,41 @@ call_gemini_api() {
             continue
         fi
 
-        echo "Max Tokens: $max_tokens" >&2
         echo "➡️ Trying Gemini model: $model_name" >&2
         local url="https://generativelanguage.googleapis.com/v1beta/models/${model_name}:generateContent"
         echo "📡 Sending request to: $url" >&2
-        local full_prompt="$system_prompt\n\n$prompt"
-        
+
+        # Guard the JSON payload against empty/invalid numeric args
+        [[ -z "$temperature" || ! "$temperature" =~ ^[0-9]+(\.[0-9]+)?$ ]] && temperature=0.7
+        [[ -z "$max_tokens" || ! "$max_tokens" =~ ^[0-9]+$ ]] && max_tokens=8192
+
+        # The system prompt MUST travel with the request: Gemini has a dedicated
+        # systemInstruction field and silently ignores anything else. Previously
+        # only the user prompt was sent, so every role/style/format instruction
+        # (including "format chapters as: Chapter N: Title") was dropped.
         local payload=$(jq -n \
             --arg prompt "$prompt" \
+            --arg system "$system_prompt" \
             --argjson temp "$temperature" \
             --argjson maxtokens "$max_tokens" \
             --argjson topk "$top_k" \
             --argjson topp "$top_p" \
             '{
-                "contents": [{
-                    "role": "user",
-                    "parts": [{"text": $prompt}]
-                }],
-                "generationConfig": {
-                    "temperature": ($temp | tonumber),
-                    "maxOutputTokens": ($maxtokens | tonumber),
-                    "topK": ($topk | tonumber),
-                    "topP": ($topp | tonumber)
+                contents: [{
+                    role: "user",
+                    parts: [{text: $prompt}]
+                }]
+            }
+            + (if ($system | length) > 0
+               then {systemInstruction: {parts: [{text: $system}]}}
+               else {}
+               end)
+            + {
+                generationConfig: {
+                    temperature: ($temp | tonumber),
+                    maxOutputTokens: ($maxtokens | tonumber),
+                    topK: ($topk | tonumber),
+                    topP: ($topp | tonumber)
                 }
             }')
 
@@ -381,25 +499,33 @@ call_gemini_api() {
         "$url")
     local curl_exit_code=$?
 
-        # Check for successful response
-        if echo "$response" | jq -e '.candidates[0].content.parts[0].text' >/dev/null 2>&1; then
-            echo "$response" | jq -r '.candidates[0].content.parts[0].text'
+        # Check for a usable response. Note: `jq -e` succeeds on an empty body,
+        # so an unreachable endpoint used to look like a successful (empty)
+        # generation — require actual text now.
+        local text
+        text=$(echo "$response" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)
+        if [ -n "$text" ]; then
+            printf '%s\n' "$text"
             return 0
-        else
-            # Check if error is rate limit related
-            if echo "$response" | grep -q "Resource has been exhausted" || \
-               echo "$response" | grep -q "rateLimitExceeded" || \
-               echo "$response" | grep -q "quota exceeded"; then
-                echo "⚠️ Rate limit hit for $model_name, cycling to next model" >&2
-                # Record the error time for this model
-                set_model_error_time "$model_name"
-            else
-                echo "❌ Gemini API error with $model_name: $response" >&2
-            fi
-            
-            # Move to next model for the next attempt
-            GEMINI_MODEL_INDEX=$(( (GEMINI_MODEL_INDEX + 1) % ${#GEMINI_MODELS[@]} ))
         fi
+
+        # Check if error is rate limit related
+        if echo "$response" | grep -q "Resource has been exhausted" || \
+           echo "$response" | grep -q "rateLimitExceeded" || \
+           echo "$response" | grep -q "quota exceeded"; then
+            echo "⚠️ Rate limit hit for $model_name, cycling to next model" >&2
+            # Record the error time for this model
+            set_model_error_time "$model_name"
+        elif [ "$curl_exit_code" -ne 0 ]; then
+            echo "❌ Gemini request failed (curl exit $curl_exit_code) for $model_name" >&2
+        elif echo "$response" | grep -q '"finishReason": *"MAX_TOKENS"'; then
+            echo "⚠️ $model_name stopped at the output token limit (raise --words-per-chapter budget or lower the target length)" >&2
+        else
+            echo "❌ Gemini API error with $model_name: $response" >&2
+        fi
+
+        # Move to next model for the next attempt
+        GEMINI_MODEL_INDEX=$(( (GEMINI_MODEL_INDEX + 1) % ${#GEMINI_MODELS[@]} ))
     done
     
     echo "❌ All Gemini models failed or hit rate limits" >&2
@@ -414,7 +540,11 @@ call_groq_api() {
     local max_tokens="$4"
     
     local url="https://api.groq.com/openai/v1/chat/completions"
-    
+
+    # Guard the JSON payload against empty/invalid numeric args
+    [[ -z "$temperature" || ! "$temperature" =~ ^[0-9]+(\.[0-9]+)?$ ]] && temperature=0.7
+    [[ -z "$max_tokens" || ! "$max_tokens" =~ ^[0-9]+$ ]] && max_tokens=8192
+
     local payload=$(jq -n \
         --arg system "$system_prompt" \
         --arg prompt "$prompt" \
@@ -435,14 +565,22 @@ call_groq_api() {
         -H "Content-Type: application/json" \
         -d "$payload" \
         "$url")
-    
-    if echo "$response" | jq -e '.choices[0].message.content' >/dev/null 2>&1; then
-        echo "$response" | jq -r '.choices[0].message.content'
+    local curl_exit_code=$?
+
+    # Only treat a response as successful when it actually carries text
+    local text
+    text=$(echo "$response" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+    if [ -n "$text" ]; then
+        printf '%s\n' "$text"
         return 0
+    fi
+
+    if [ "$curl_exit_code" -ne 0 ]; then
+        echo "❌ Groq request failed (curl exit $curl_exit_code)" >&2
     else
         echo "Groq API error: $response" >&2
-        return 1
     fi
+    return 1
 }
 
 # Ollama API call with improved context handling
@@ -490,27 +628,39 @@ call_ollama_api() {
         fi
     fi
     
-    # Choose appropriate model based on availability
-    if ! ollama list 2>/dev/null | grep -q "$model_name"; then
-        # First try popular high-quality models
-        local fallback_models=(
-            "llama3.1:8b"
-            "phi3:3.8b"
-            "phi4-mini:3.8b"
-            "gemma3:4b"
-            "gemma2:2b"
-            "llama3.2:1b"
-            "qwen2.5:1.5b"
-            "granite3:3b"
-        )
-        
-        for fallback in "${fallback_models[@]}"; do
-            if ollama list 2>/dev/null | grep -q "$fallback"; then
-                model_name="$fallback"
-                echo "⚠️ Model '$5' not found, using fallback: $model_name" >&2
-                break
-            fi
-        done
+    # Default to the requested model. `model_name` used to be referenced before
+    # it was ever assigned (only the fallback loop below set it), so whenever
+    # the `ollama` CLI was missing — the normal case when talking to the HTTP
+    # API directly — every model-based branch compared against an empty string
+    # and the context-window tuning below silently did nothing.
+    local model_name="${model:-llama3:8b}"
+
+    # Choose appropriate model based on availability (needs the Ollama CLI; the
+    # HTTP API works without it, in which case the requested model is used).
+    if command -v ollama >/dev/null 2>&1; then
+        if ! ollama list 2>/dev/null | grep -q "$model_name"; then
+            # First try popular high-quality models
+            local fallback_models=(
+                "llama3.1:8b"
+                "phi3:3.8b"
+                "phi4-mini:3.8b"
+                "gemma3:4b"
+                "gemma2:2b"
+                "llama3.2:1b"
+                "qwen2.5:1.5b"
+                "granite3:3b"
+            )
+
+            for fallback in "${fallback_models[@]}"; do
+                if ollama list 2>/dev/null | grep -q "$fallback"; then
+                    model_name="$fallback"
+                    echo "⚠️ Model '$model' not found, using fallback: $model_name" >&2
+                    break
+                fi
+            done
+        fi
+    else
+        echo "DEBUG: ollama CLI not found — using the HTTP API with model '$model_name'" >> "$LOG_FILE"
     fi
     
     # Calculate optimal context window based on model and prompt size
@@ -566,7 +716,7 @@ call_ollama_api() {
     fi
 
     # Write message directly without using grep in pipe
-    echo -e "🖥️  Using local Ollama model: $model with temperature $temperature" >&2
+    echo -e "🖥️  Using local Ollama model: $model_name with temperature $temperature" >&2
     echo "DEBUG: Using model: $model_name, temperature: $temperature, max_tokens: $max_tokens, ctx: $ctx_window" >> "$LOG_FILE"
     
     local url="http://localhost:11434/api/generate"
@@ -591,7 +741,7 @@ call_ollama_api() {
     
     # Use jq to properly format the JSON payload
     local payload=$(jq -n \
-        --arg model "$model" \
+        --arg model "$model_name" \
         --arg prompt "$formatted_prompt" \
         --argjson temp "$temperature" \
         --argjson max_tokens "$max_tokens" \
@@ -606,7 +756,7 @@ call_ollama_api() {
             "stream": ($stream_val == true),
             "options": {
                 "temperature": $temp,
-                "max_tokens": $max_tokens,
+                "num_predict": $max_tokens,
                 "top_k": $topk,
                 "top_p": $topp,
                 "num_batch": $num_batch,
@@ -629,39 +779,42 @@ call_ollama_api() {
     echo "DEBUG: curl completed with exit code: $curl_exit_code" >> "$LOG_FILE"
     echo "DEBUG: Response length: ${#response} characters" >> "$LOG_FILE"
     
-    # Check for successful response
-    if echo "$response" | jq -e '.response' >/dev/null 2>&1; then
-        local extracted_response=$(echo "$response" | jq -r '.response')
-        
-        # BUGFIX: Remove the original prompt from the response
-        # The issue was that Ollama sometimes includes the original prompt in the response
-        # This fix ensures we only get the generated content, not the prompt
-        
-        # Remove system and user prompt parts that might be included
-        extracted_response=$(echo "$extracted_response" | sed -E 's/^.*<\|assistant\|>//g')
-        extracted_response=$(echo "$extracted_response" | sed -E 's/^.*<start_of_turn>model//g')
-        extracted_response=$(echo "$extracted_response" | sed -E 's/^.*Assistant://g')
-        
-        # Remove the original prompt text if it appears at the beginning
-        if [[ "$extracted_response" == *"$prompt"* ]]; then
-            extracted_response=$(echo "$extracted_response" | sed "s|$prompt||g")
+    # Check for a usable response. `jq -e` succeeds on an empty body, so an
+    # unreachable Ollama used to be reported as a successful empty generation.
+    local extracted_response
+    extracted_response=$(echo "$response" | jq -r '.response // empty' 2>/dev/null)
+
+    if [ -n "$extracted_response" ]; then
+        # Strip chat template markers that a local model may echo back. The
+        # previous code also tried to cut the original prompt out with
+        # `sed "s|$prompt||g"` — that broke on any prompt containing regex
+        # characters, newlines or slashes, and could delete real prose.
+        extracted_response=$(printf '%s\n' "$extracted_response" | sed -E \
+            -e 's/^.*<\|assistant\|>//g' \
+            -e 's/^.*<start_of_turn>model//g' \
+            -e 's/^.*Assistant://g' \
+            -e 's/<\|system\|>.*<\|user\|>//g' \
+            -e 's/<\|user\|>.*<\|assistant\|>//g')
+
+        # A response that is only whitespace is not a success either
+        if [ -n "$(printf '%s' "$extracted_response" | tr -d '[:space:]')" ]; then
+            echo "DEBUG: Successfully extracted response, length: ${#extracted_response}" >> "$LOG_FILE"
+            printf '%s\n' "$extracted_response"
+            return 0
         fi
-        
-        # Remove any remaining system/user markers
-        extracted_response=$(echo "$extracted_response" | sed -E 's/<\|system\|>.*<\|user\|>//g')
-        extracted_response=$(echo "$extracted_response" | sed -E 's/<\|user\|>.*<\|assistant\|>//g')
-        
-        echo "DEBUG: Successfully extracted response, length: ${#extracted_response}" >> "$LOG_FILE"
-        echo -e "${GREEN}✓ Generated with $model_name${RESET}" >&2
-        echo "$extracted_response"
-        return 0
-    else
-        # Try to provide better error info
-        local error_message=$(echo "$response" | jq -r '.error // "Unknown error"')
-        echo "❌ Ollama API error with $model_name: $error_message" >&2
-        echo "DEBUG: Failed to extract .response from JSON, error: $error_message" >> "$LOG_FILE"
-        return 1
     fi
+
+    # Provide better error info
+    local error_message
+    error_message=$(echo "$response" | jq -r '.error // "empty response"' 2>/dev/null)
+    if [ "$curl_exit_code" -ne 0 ]; then
+        echo "❌ Ollama request failed (curl exit $curl_exit_code) — is 'ollama serve' running?" >&2
+        error_message="curl exit $curl_exit_code"
+    else
+        echo "❌ Ollama API error with $model_name: $error_message" >&2
+    fi
+    echo "DEBUG: Failed to extract .response from JSON, error: $error_message" >> "$LOG_FILE"
+    return 1
 }
 
 # ============================================================================
@@ -674,95 +827,133 @@ generate_outline_with_smart_api() {
     local audience="$3"
     local style="${4:-detailed}"
     local tone="${5:-professional}"
-    
-    local system_prompt="You are an expert book author and publishing professional tasked with creating high-quality, commercially viable books for publication on KDP and other platforms. Your goal is to produce engaging, well-structured, and professionally written content that readers will find valuable and enjoyable.
+    # Optional (6th/7th): the requested shape of the book. Without these the
+    # outline claimed 12-15 chapters of 2,500-3,000 words no matter what the
+    # user asked for, so chapter summaries described a different book.
+    local chapters="${6:-12}"
+    local words_per_chapter="${7:-3000}"
 
-Create detailed book outlines that will guide the generation of 20,000-25,000 word books with 12-15 chapters of 2,500-3,000 words each.
+    if ! [[ "$chapters" =~ ^[0-9]+$ ]] || [ "$chapters" -lt 1 ]; then chapters=12; fi
+    if ! [[ "$words_per_chapter" =~ ^[0-9]+$ ]] || [ "$words_per_chapter" -lt 1 ]; then words_per_chapter=3000; fi
+    local total_words=$(( chapters * words_per_chapter ))
 
-When creating outlines, always format chapter titles clearly as:
-Chapter 1: [Title]
-Chapter 2: [Title]
-etc.
+    local system_prompt="You are a book planner and publishing professional who designs commercially viable books for KDP and other platforms. You reply with a single clean Markdown outline: no preamble, no closing commentary, no explanation of your process, and no code fences.
 
-Include comprehensive chapter summaries that will guide detailed content generation. DO NOT include any markdown characters or formatting other than numbered lists."
-    
+The outline always follows this exact structure so downstream tooling can parse it:
+
+# <Book Title>
+## <Book Subtitle>
+### Chapter 1: <Chapter Title>
+<2-3 sentence summary of the chapter and the value it delivers>
+### Chapter 2: <Chapter Title>
+<summary>
+... and so on for every requested chapter ...
+
+## Core Themes
+- <3-5 bullets>
+
+## Target Reader
+<one short paragraph on reading level and tone>"
+
     local user_prompt="Create a detailed outline for a ${genre} book about '${topic}' targeting ${audience}.
 
-REQUIRED FORMAT - Use this exact format for chapters:
-Chapter 1: [Chapter Title]
-Chapter 2: [Chapter Title]
-[etc.]
+The finished book will have exactly ${chapters} chapters of roughly ${words_per_chapter} words each (about ${total_words} words in total), written in a ${style} style with a ${tone} tone.
 
-Include:
-- Compelling book title and subtitle
-- 12-15 chapters with descriptive titles
-- 2-3 sentence summary for each chapter explaining what will be covered
-- Character profiles (fiction) or key concept definitions (non-fiction)
-- 3-5 core themes to weave throughout the book
-- Target reading level and tone guidance
-- Suggested word count distribution
+Output format — follow it exactly:
+- First line: '# ' followed by the book title
+- Second line: '## ' followed by the subtitle
+- Then one '### Chapter N: Title' line per chapter (numbered 1 to ${chapters}, in order), each followed by its 2-3 sentence summary
+- Finish with the '## Core Themes' and '## Target Reader' sections described above
 
-Make sure chapter titles are specific and promise clear value to readers. DO NOT include any markdown characters or formatting other than numbered lists."
-    
+Chapter titles must be specific and promise clear value. Each chapter must cover a distinct topic with no overlap, and the chapters must build on each other in a logical order. Do not add anything before the title line or after the Target Reader section."
+
     smart_api_call "$user_prompt" "$system_prompt" "analytical" 0.7 8192
 }
 
 generate_chapter_with_smart_api() {
     local chapter_num="$1"
     local chapter_title="$2"
-    local existing_chapters="$3"
+    local prior_context="$3"
     local outline="$4"
     local min_words="$5"
     local max_words="$6"
-    local style="$7"
-    local tone="$8"
-    
-    local system_prompt="You are a professional author writing a high-quality book. Write in ${style} style with ${tone} tone. Ensure content is original, engaging, and valuable to readers."
-    
-    local user_prompt="Write Chapter ${chapter_num}: ${chapter_title}
+    local style="${7:-engaging and informative}"
+    local tone="${8:-accessible and professional}"
+    # Optional 9th argument: output-token budget (derived from the requested
+    # chapter length by generate_book.sh, otherwise a long chapter can be cut
+    # off mid-sentence by the provider's default cap).
+    local max_tokens="${9:-8192}"
 
-Book Outline Context:
+    if [ -z "$prior_context" ]; then
+        prior_context="(nothing yet — this is the opening chapter)"
+    fi
+
+    local system_prompt="You are a professional book author. You write ${style} prose in a ${tone} tone, and you output finished manuscript text only: no preamble, no closing remarks, no notes about word counts or about what you did, and no code fences."
+
+    local user_prompt="Write Chapter ${chapter_num} of the book, titled \"${chapter_title}\".
+
+=== BOOK OUTLINE ===
 ${outline}
 
-Previous Chapters (for continuity):
-${existing_chapters}
+=== ALREADY WRITTEN (use for continuity, do not repeat) ===
+${prior_context}
 
-Requirements:
-- Write ${min_words}-${max_words} words
-- Make it engaging and informative
-- Ensure smooth transitions and flow
-- Include practical examples where appropriate
-- Maintain consistency with previous chapters
-- Write in ${style} style with ${tone} tone
+=== REQUIREMENTS ===
+- Length: ${min_words}-${max_words} words of finished prose.
+- Write only the chapter body. Start directly with the first paragraph or with a section heading.
+- Do not repeat the chapter title as a heading, do not add an introduction like 'In this chapter we will', and do not add a summary or sign-off at the end.
+- Use Markdown headings (##, ###) for sections, and keep paragraphs short.
+- Include concrete examples, numbers or steps where they help.
+- Do not re-explain concepts that earlier chapters already covered; instead build on them.
+- Keep the ${style} style and ${tone} tone consistent with the rest of the book.
 
-Begin writing the chapter now:"
-    
-    smart_api_call "$user_prompt" "$system_prompt" "creative" 0.8 8192
+Write the first sentence of the chapter now."
+
+    smart_api_call "$user_prompt" "$system_prompt" "creative" 0.8 "$max_tokens"
 }
 
 check_plagiarism_with_smart_api() {
     local chapter_file="$1"
-    local content=$(cat "$chapter_file")
-    
-    local system_prompt="You are an expert plagiarism checker and originality assessor. Analyze content for originality and potential copyright issues."
-    
-    local user_prompt="Analyze this chapter content for originality and plagiarism concerns:
+    local content
+    content=$(cat "$chapter_file")
 
+    local system_prompt="You are an expert plagiarism checker and originality assessor. You judge whether text looks independently written, flags passages that read like copied or boilerplate material, and you always answer in the requested machine-readable shape."
+
+    local user_prompt="Assess this chapter for originality and potential copyright concerns.
+
+=== CHAPTER TEXT ===
 ${content}
 
-Provide:
-1. Originality score (1-10, where 10 is completely original)
-2. Any potential copyright concerns
-3. Recommendations for improvement if needed
+=== ANSWER FORMAT (follow exactly, nothing else) ===
+ORIGINALITY: <whole number from 0 to 10, where 10 is fully original>
+CONCERNS: <short list, or 'none'>
+RECOMMENDATIONS: <short list, or 'none'>"
 
-Be thorough but fair in your assessment."
-    
-    local result=$(smart_api_call "$user_prompt" "$system_prompt" "analytical" 0.3 4096)
-    
-    # Extract score and determine return code
-    if echo "$result" | grep -q -E "(score|rating).*[8-9]|10"; then
+    local result score
+    result=$(smart_api_call "$user_prompt" "$system_prompt" "analytical" 0.3 4096)
+
+    # Parse the score numerically. The previous check (`grep -E "(score|rating).*[8-9]|10"`)
+    # matched any stray '10' anywhere in the reply, so a chapter scoring 3/10
+    # was reported as fully original.
+    score=$(printf '%s\n' "$result" \
+        | grep -oiE 'originality[^0-9]{0,15}([0-9]{1,2})' \
+        | grep -oE '[0-9]{1,2}' | head -1)
+
+    if [ -z "$score" ]; then
+        # Fall back to any "<n>/10" or "<n> out of 10" phrasing
+        score=$(printf '%s\n' "$result" \
+            | grep -oE '[0-9]{1,2}[[:space:]]*(/|out of)[[:space:]]*10' \
+            | grep -oE '^[0-9]{1,2}' | head -1)
+    fi
+
+    if [ -z "$score" ]; then
+        echo "⚠️ Could not parse an originality score from the assessment — treating the chapter as needing review" >&2
+        return 2
+    fi
+
+    if [ "$score" -ge 8 ]; then
         return 0  # High originality
-    elif echo "$result" | grep -q -E "(score|rating).*[6-7]"; then
+    elif [ "$score" -ge 6 ]; then
         return 1  # Medium risk
     else
         return 2  # Low originality/high risk
@@ -772,40 +963,44 @@ Be thorough but fair in your assessment."
 rewrite_chapter_with_smart_api() {
     local chapter_file="$1"
     local plagiarism_report="$2"
-    local content=$(cat "$chapter_file")
+    local content
+    content=$(cat "$chapter_file")
     local report_content=""
-    
+
     if [ -f "$plagiarism_report" ]; then
         report_content=$(cat "$plagiarism_report")
     fi
-    
-    local system_prompt="You are an expert editor tasked with rewriting content to improve originality while maintaining quality and message."
-    
-    local user_prompt="Rewrite this chapter to improve originality and address plagiarism concerns:
 
-Original Chapter:
+    local system_prompt="You are an expert editor who rewrites text to improve originality while keeping its message, structure and voice. You output the rewritten chapter body only: no preamble, no commentary, no code fences."
+
+    local user_prompt="Rewrite this chapter so it reads as independent, original writing while keeping its message intact.
+
+=== ORIGINAL CHAPTER ===
 ${content}
 
-Plagiarism Analysis:
+=== PLAGIARISM / ORIGINALITY ANALYSIS ===
 ${report_content}
 
-Requirements:
-- Maintain the same core message and structure
-- Improve originality and uniqueness
-- Keep the same word count approximately
-- Ensure high quality and readability
-- Address any specific concerns mentioned in the analysis
+=== REQUIREMENTS ===
+- Keep the same core message, structure and section order
+- Roughly the same length as the original
+- Replace any borrowed or boilerplate phrasing with fresh wording
+- Output only the rewritten chapter body, starting directly with the first paragraph
 
 Rewrite the chapter now:"
-    
-    local result=$(smart_api_call "$user_prompt" "$system_prompt" "creative" 0.8 8192)
-    
-    if [ $? -eq 0 ] && [ -n "$result" ]; then
-        echo "$result" > "$chapter_file"
+
+    local result
+    # Note: `local result=$(...)` followed by `[ $? -eq 0 ]` tested the exit
+    # status of `local`, not of the API call — a failed rewrite then overwrote
+    # the chapter file with an empty string.
+    if result=$(smart_api_call "$user_prompt" "$system_prompt" "creative" 0.8 8192) \
+            && [ -n "$result" ]; then
+        printf '%s\n' "$result" > "$chapter_file"
         return 0
-    else
-        return 1
     fi
+
+    echo "⚠️ Rewrite failed for $(basename "$chapter_file") — original chapter left unchanged" >&2
+    return 1
 }
 
 # ============================================================================

@@ -139,7 +139,7 @@ log "📋 [1/6] Generating outline..."
 OUTLINE_FILE="$BOOK_DIR/outline.md"
 
 OUTLINE_CONTENT=$(generate_outline_with_smart_api \
-    "$TOPIC" "$GENRE" "$TARGET_AUDIENCE" "$STYLE" "$TONE")
+    "$TOPIC" "$GENRE" "$TARGET_AUDIENCE" "$STYLE" "$TONE" "$CHAPTERS" "$WORDS_PER_CHAPTER")
 
 if [[ -z "$OUTLINE_CONTENT" ]]; then
     die "Outline generation returned empty content. Verify API keys and network."
@@ -148,14 +148,42 @@ fi
 echo "$OUTLINE_CONTENT" > "$OUTLINE_FILE"
 log "        Saved: outline.md"
 
-# Parse "Chapter N: Title" or "Chapter N - Title" headings
-mapfile -t CHAPTER_LINES < <(grep -iE "^Chapter [0-9]+[:\-]" "$OUTLINE_FILE" | head -"$CHAPTERS")
+# Parse chapter headings tolerantly: "Chapter N: Title", "### Chapter N: Title",
+# "**Chapter N — Title**", "- Chapter N: Title". Numbers are de-duplicated so a
+# summary list further down the outline cannot inject a chapter twice.
+extract_outline_chapters() {
+    local outline_file="$1"
+    local limit="$2"
+
+    grep -E '^[[:space:]]*(#+[[:space:]]*)?[*_> -]*[[:space:]]*[*_]*[Cc]hapter[[:space:]]+[0-9]+' "$outline_file" \
+        | awk -v limit="$limit" '
+            {
+                line = $0
+                sub(/^[[:space:]]*(#+[[:space:]]*)?[*_> -]*[[:space:]]*/, "", line)
+                num = line
+                sub(/^[Cc]hapter[[:space:]]+/, "", num)
+                sub(/[^0-9].*$/, "", num)
+                if (num == "" || seen[num]++) next
+                sub(/^[Cc]hapter[[:space:]]+[0-9]+/, "", line)
+                sub(/^[^[:alnum:]]+/, "", line)      # ":" / "-" / "." separator + spaces
+                sub(/[*_[:space:]]+$/, "", line)
+                printf "Chapter %s: %s\n", num, line
+                count++
+                if (count >= limit) exit
+            }'
+}
+
+mapfile -t CHAPTER_LINES < <(extract_outline_chapters "$OUTLINE_FILE" "$CHAPTERS")
 
 if [[ ${#CHAPTER_LINES[@]} -eq 0 ]]; then
-    log "   ⚠️  No 'Chapter N:' headings found in outline; using $CHAPTERS placeholder titles."
-    for i in $(seq 1 "$CHAPTERS"); do
-        CHAPTER_LINES+=("Chapter $i: Chapter $i")
-    done
+    # A book of placeholder-titled chapters ("Chapter 1: Chapter 1") is worse
+    # than no book: stop here with something actionable instead.
+    die "The outline contains no 'Chapter N: Title' headings, so no chapters could be planned.
+     Outline file: $OUTLINE_FILE
+     First lines of the outline:
+$(head -n 5 "$OUTLINE_FILE" | sed 's/^/       /')
+     Edit that file so each chapter starts with a '### Chapter N: Title' line,
+     or re-run with a topic that produces a parseable outline."
 fi
 
 ACTUAL_CHAPTERS=${#CHAPTER_LINES[@]}
@@ -167,6 +195,17 @@ EXISTING_CHAPTERS=""
 MIN_WORDS=$WORDS_PER_CHAPTER
 MAX_WORDS=$((WORDS_PER_CHAPTER + 1000))
 
+# Output-token budget for one chapter. English prose runs ~1.5-1.7 tokens per
+# word, so a 4,000-word chapter needs far more than a small default cap; without
+# this the model stops mid-sentence at the provider's limit.
+MAX_TOKENS=$(( WORDS_PER_CHAPTER * 2 ))
+[[ $MAX_TOKENS -lt 4096 ]] && MAX_TOKENS=4096
+[[ $MAX_TOKENS -gt 8192 ]] && MAX_TOKENS=8192
+
+FAILED_CHAPTERS=0
+WRITTEN_CHAPTERS=0
+LAST_TAIL=""
+
 for i in "${!CHAPTER_LINES[@]}"; do
     CHAPTER_NUM=$((i + 1))
     CHAPTER_LINE="${CHAPTER_LINES[$i]}"
@@ -177,18 +216,29 @@ for i in "${!CHAPTER_LINES[@]}"; do
 
     log "        [$CHAPTER_NUM/$ACTUAL_CHAPTERS] $CHAPTER_TITLE"
 
+    # Continuity context: the running list of chapters (compact) plus the tail
+    # of the previous chapter so the model can match voice and pick the thread
+    # up, without paying to resend every earlier chapter in full.
+    PRIOR_CONTEXT="$EXISTING_CHAPTERS"
+    if [[ -n "$LAST_TAIL" ]]; then
+        PRIOR_CONTEXT="${PRIOR_CONTEXT}
+End of the previous chapter, for voice and continuity: ...${LAST_TAIL}"
+    fi
+
     CHAPTER_CONTENT=$(generate_chapter_with_smart_api \
         "$CHAPTER_NUM" \
         "$CHAPTER_TITLE" \
-        "$EXISTING_CHAPTERS" \
+        "$PRIOR_CONTEXT" \
         "$OUTLINE_CONTENT" \
         "$MIN_WORDS" \
         "$MAX_WORDS" \
         "$STYLE" \
-        "$TONE") || true  # never bail on a single chapter failure
+        "$TONE" \
+        "$MAX_TOKENS") || true  # never bail on a single chapter failure
 
     if [[ -z "$CHAPTER_CONTENT" ]]; then
         log "        ⚠️  Chapter $CHAPTER_NUM failed — writing placeholder"
+        FAILED_CHAPTERS=$((FAILED_CHAPTERS + 1))
         CHAPTER_CONTENT="# $CHAPTER_TITLE
 
 *[Chapter $CHAPTER_NUM generation failed. Re-run with:]*
@@ -196,14 +246,29 @@ for i in "${!CHAPTER_LINES[@]}"; do
 \`\`\`bash
 ./scripts/generate_book.sh --topic \"${TOPIC}\" --skip-compile
 \`\`\`"
+        LAST_TAIL=""
+    else
+        WRITTEN_CHAPTERS=$((WRITTEN_CHAPTERS + 1))
+        LAST_TAIL=$(printf '%s' "$CHAPTER_CONTENT" | tail -c 700 | tr '\n' ' ' | tr -s ' ')
     fi
 
     echo "$CHAPTER_CONTENT" > "$CHAPTER_FILE"
     # Accumulate brief summary for continuity context (capped to avoid token bloat)
-    EXISTING_CHAPTERS="${EXISTING_CHAPTERS}Chapter ${CHAPTER_NUM}: ${CHAPTER_TITLE} (complete). "
+    EXISTING_CHAPTERS="${EXISTING_CHAPTERS}Chapter ${CHAPTER_NUM}: ${CHAPTER_TITLE} (written). "
 done
 
-log "        All $ACTUAL_CHAPTERS chapters written"
+if [[ $WRITTEN_CHAPTERS -eq 0 ]]; then
+    die "Every chapter failed to generate — nothing worth compiling.
+     Book directory: $BOOK_DIR
+     Fix the provider problem reported above (API key, quota, or 'ollama serve')
+     and run the same command again; chapters are written one file at a time."
+fi
+
+if [[ $FAILED_CHAPTERS -gt 0 ]]; then
+    log "        ⚠️  $WRITTEN_CHAPTERS/$ACTUAL_CHAPTERS chapters written, $FAILED_CHAPTERS failed"
+else
+    log "        ✓ All $ACTUAL_CHAPTERS chapters written"
+fi
 
 # ── [3/6] Appendices ──────────────────────────────────────────────────────────
 if [[ "$SKIP_APPENDICES" = false && -n "${GEMINI_API_KEY:-}" ]]; then

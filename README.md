@@ -116,6 +116,36 @@ variables to enable them:
 If none of the above keys are present the generator will still run but rely on
 local tools and the basic ImageMagick cover-generator fallback.
 
+🧠 How the AI Layer Behaves
+------------------------
+`scripts/multi_provider_ai_simple.sh` is the single choke point every AI call
+goes through (outline, chapters, appendices, references, originality checks):
+
+- **Provider order:** Gemini → local Ollama → Groq, unless you pin one with
+	`--provider gemini|ollama|groq` (or `SMART_API_PROVIDER`). Pinning is strict: a
+	pinned provider is never silently replaced by another.
+- **System prompts are real system prompts.** Gemini requests carry the
+	instruction block in `systemInstruction`; a dropped system prompt was the reason
+	generated outlines ignored the requested chapter format.
+- **Responses are cleaned before they reach a manuscript.** Chat preambles
+	("Sure! Here is the chapter…"), wrapping ``` fences, duplicated `# Chapter N`
+	headings, "Word count: 412" lines and sign-offs are stripped, while genuine code
+	blocks inside technical chapters are preserved. Fences left in place used to be
+	rendered as `<pre>` code blocks in the EPUB/PDF.
+- **Empty output is a failure.** A blank body (unreachable endpoint, quota error)
+	no longer looks like a successful generation; the pipeline reports which
+	providers it checked instead of writing empty chapters.
+- **Fail fast.** If nothing is listening on `localhost:11434` and no API key is
+	set, the run stops in seconds with one clear message rather than cycling through
+	local models.
+- **Outline contract:** the planner is asked for `# Title`, `## Subtitle`, then
+	`### Chapter N: Title` plus a summary, using the exact chapter count and word
+	target you passed. If an outline comes back unparseable, the pipeline stops and
+	shows you the first lines instead of writing placeholder-titled chapters.
+- **Originality check:** the model answers with `ORIGINALITY: <n>/10`, which is
+	parsed numerically (8-10 pass, 6-7 warn, below 6 or unparseable is flagged for
+	review).
+
 🚀 Typical Workflow (High-level)
 -----------------------------
 1. Prepare a book outline file in a directory under `book_outputs/` or create a new
