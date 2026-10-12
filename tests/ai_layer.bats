@@ -342,6 +342,104 @@ CONCERNS: copied paragraphs"
     [ "$output" = "Original chapter text." ]
 }
 
+@test ".env is loaded without overriding the existing environment" {
+    dotenv="$BATS_TEST_TMPDIR/.env"
+    cat > "$dotenv" <<'EOT'
+# comment line
+GEMINI_API_KEY=from-dotenv-file
+CUSTOM_API_BASE_URL="https://example.test/v1"
+  SPACED_KEY = spaced-value
+export EXPORTED_KEY=exported-value
+NOT A VALID LINE
+EOT
+
+    unset GEMINI_API_KEY CUSTOM_API_BASE_URL SPACED_KEY EXPORTED_KEY 2>/dev/null || true
+    export GROQ_API_KEY="already-set-in-env"
+    printf 'GROQ_API_KEY=should-not-win\n' >> "$dotenv"
+
+    # Called directly (not via `run`) because the loader exports into the current
+    # shell — bats runs `run` in a subshell, where those exports would vanish.
+    load_dotenv_if_present "$dotenv" > "$BATS_TEST_TMPDIR/loader.out" 2>&1
+
+    [ "$GEMINI_API_KEY" = "from-dotenv-file" ]
+    [ "$CUSTOM_API_BASE_URL" = "https://example.test/v1" ]
+    [ "$SPACED_KEY" = "spaced-value" ]
+    [ "$EXPORTED_KEY" = "exported-value" ]
+    # an explicit export in the environment must never be clobbered by the file
+    [ "$GROQ_API_KEY" = "already-set-in-env" ]
+
+    # the values themselves must not be echoed anywhere
+    run cat "$BATS_TEST_TMPDIR/loader.out"
+    [[ "$output" != *"from-dotenv-file"* ]]
+    [[ "$output" == *"GEMINI_API_KEY"* ]]
+}
+
+@test "critique scores are parsed from the rubric report" {
+    report="$BATS_TEST_TMPDIR/critique.md"
+    printf 'CLARITY: 7\nSPECIFICITY: 5\nOVERALL: 6\nFIXES:\n- add examples\n' > "$report"
+    run critique_overall_score "$report"
+    [ "$output" = "6" ]
+
+    printf 'Overall score: 9 out of 10\n' > "$report"
+    run critique_overall_score "$report"
+    [ "$output" = "9" ]
+
+    printf 'no numeric verdict here\n' > "$report"
+    run critique_overall_score "$report"
+    [ -z "$output" ]
+    [ "$status" -eq 0 ]
+}
+
+@test "score_below_threshold treats missing scores as needing revision" {
+    run score_below_threshold 5 8;  [ "$status" -eq 0 ]   # 5 < 8  → revise
+    run score_below_threshold 8 8;  [ "$status" -ne 0 ]   # 8 >= 8 → keep
+    run score_below_threshold 9 8;  [ "$status" -ne 0 ]
+    run score_below_threshold "" 8; [ "$status" -eq 0 ]   # unparseable → revise
+    run score_below_threshold abc 8; [ "$status" -eq 0 ]
+}
+
+@test "a critique report is written for a chapter" {
+    chapter="$BATS_TEST_TMPDIR/chapter_01.md"
+    printf 'Some prose about a topic.\n' > "$chapter"
+    printf '# Book\n### Chapter 1: One\n' > "$BATS_TEST_TMPDIR/outline.md"
+
+    gemini_reply "CLARITY: 4
+SPECIFICITY: 3
+AUDIENCE FIT: 6
+STRUCTURE: 5
+ORIGINALITY: 6
+OVERALL: 4
+FIXES:
+- add two concrete examples"
+
+    run silenced critique_chapter_with_smart_api "$chapter" "$BATS_TEST_TMPDIR/outline.md"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OVERALL: 4"* ]]
+
+    printf '%s' "$output" > "$BATS_TEST_TMPDIR/report.md"
+    run critique_overall_score "$BATS_TEST_TMPDIR/report.md"
+    [ "$output" = "4" ]
+}
+
+@test "revision rewrites a chapter from a critique and refuses to empty it" {
+    chapter="$BATS_TEST_TMPDIR/chapter_02.md"
+    printf 'Vague original prose.\n' > "$chapter"
+    printf 'OVERALL: 4\nFIXES:\n- be specific\n' > "$BATS_TEST_TMPDIR/report.md"
+
+    gemini_reply "Sharp revised prose with a concrete example."
+    run silenced revise_chapter_with_report "$chapter" "$BATS_TEST_TMPDIR/report.md"
+    [ "$status" -eq 0 ]
+    run cat "$chapter"
+    [ "$output" = "Sharp revised prose with a concrete example." ]
+
+    # a failing provider must leave the existing chapter alone
+    : > "$REPLY_FILE"
+    run silenced revise_chapter_with_report "$chapter" "$BATS_TEST_TMPDIR/report.md"
+    [ "$status" -ne 0 ]
+    run cat "$chapter"
+    [ "$output" = "Sharp revised prose with a concrete example." ]
+}
+
 @test "outline chapter extraction tolerates markdown headings and de-duplicates" {
     outline="$BATS_TEST_TMPDIR/outline.md"
     cat > "$outline" <<'EOF'
@@ -362,7 +460,7 @@ Summary three.
 EOF
 
     # Extract the helper straight out of generate_book.sh so it can be tested alone
-    sed -n '/^extract_outline_chapters() {/,/^}/p' scripts/generate_book.sh > "$BATS_TEST_TMPDIR/fn.sh"
+    sed -n "/^extract_outline_chapters() {/,/^}/p" scripts/multi_provider_ai_simple.sh > "$BATS_TEST_TMPDIR/fn.sh"
     # shellcheck disable=SC1090
     source "$BATS_TEST_TMPDIR/fn.sh"
 

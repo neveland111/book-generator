@@ -25,6 +25,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Author community platform
 - AI-powered reader feedback analysis
 
+## [1.5.0] - 2026-10-12
+
+### Added — `scripts/agent_book.sh`: agent-style pipeline with a critique loop
+
+`generate_book.sh` writes each chapter once and keeps whatever comes back. The new
+orchestrator adds the missing feedback loop: **plan → write → critique → revise →
+compile**.
+
+- Every chapter is graded against a rubric (clarity, specificity, audience fit,
+  structure, originality + an `OVERALL` score) and the critique's `FIXES:` list is
+  fed straight into a revision pass. Chapters scoring below `--threshold`
+  (default 8/10) are revised and re-graded, up to `--max-revisions` (default 1).
+- `agent_report.md` in the book directory carries the audit trail: score before,
+  revision count, score after, word count and status per chapter. The full
+  critiques are kept as `critique_chapter_NN.md` (plus `…_after_revision_N.md`), so
+  a human can see exactly what the model was told and what changed.
+- `--max-revisions 0` disables grading entirely, making it behave like the batch
+  pipeline; `--skip-originality` / `--skip-compile` skip the last two steps.
+- Failed drafts are counted and reported instead of silently becoming placeholder
+  chapters ("Chapter 1: Chapter 1"); the run aborts when every chapter failed.
+
+### Added — automatic `.env` loading
+
+- `load_dotenv_if_present` in the AI layer is now called by `generate_book.sh`,
+  `agent_book.sh` and `multi_provider_ai_simple.sh` itself (so `status` / `test`
+  see the same configuration). `cp .env.example .env` is enough — no more
+  `export` gymnastics.
+- Variables already present in the environment are never overwritten, and the
+  loader prints only variable **names** (`Loaded 4 variable(s) from .env: …`),
+  never their values, so keys cannot leak into logs or CI output.
+
+### Changed
+
+- `extract_outline_chapters` moved into `multi_provider_ai_simple.sh` and is now
+  shared by both orchestrators, so the outline parser cannot drift between them.
+- New shared helpers `score_below_threshold`, `critique_chapter_with_smart_api`,
+  `critique_overall_score` and `revise_chapter_with_report`; the latter refuses to
+  overwrite a chapter when the provider returns nothing.
+
+### Tests
+
+- 5 new offline tests (31 total): `.env` loading semantics (including "existing
+  environment wins" and "values are never echoed"), critique-score parsing,
+  threshold logic (missing scores count as "needs revision"), critique report
+  generation, and revision safety.
+
 ## [1.4.0] - 2026-10-12
 
 ### Fixed — bundled sample artwork leaked into every book

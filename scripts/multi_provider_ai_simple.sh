@@ -123,6 +123,89 @@ ollama_reachable() {
     curl -s --max-time 2 -o /dev/null "http://localhost:11434/api/tags" 2>/dev/null
 }
 
+# Load a .env file (KEY=VALUE per line) without ever overriding variables that
+# are already set in the environment, so an explicit `export` / CLI-adjacent
+# override always wins. Values are never printed — only the variable names.
+#
+#   load_dotenv_if_present                  # uses <repo root>/.env
+#   load_dotenv_if_present /path/to/.env
+load_dotenv_if_present() {
+    local repo_root env_file
+    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    env_file="${1:-$repo_root/.env}"
+
+    [ -f "$env_file" ] || return 0
+
+    local line key value loaded=()
+    while IFS= read -r line || [ -n "$line" ]; do
+        # strip CR, surrounding whitespace, comments and a leading `export `
+        line="${line%$'\r'}"
+        line="$(printf '%s' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+        case "$line" in ''|'#'*) continue ;; esac
+        line="${line#export }"
+        case "$line" in *=*) ;; *) continue ;; esac
+
+        key="$(printf '%s' "$line" | cut -d= -f1 | sed -E 's/[[:space:]]+$//')"
+        value="$(printf '%s' "$line" | cut -d= -f2- | sed -E 's/^[[:space:]]+//')"
+        case "$key" in ''|*[!A-Za-z0-9_]*) continue ;; esac
+
+        # strip matching quotes
+        case "$value" in
+            \"*\") value="${value#\"}"; value="${value%\"}" ;;
+            \'*\') value="${value#\'}"; value="${value%\'}" ;;
+        esac
+
+        # never clobber an existing non-empty variable
+        if [ -n "${!key:-}" ]; then
+            continue
+        fi
+
+        export "$key=$value"
+        loaded+=("$key")
+    done < "$env_file"
+
+    if [ ${#loaded[@]} -gt 0 ]; then
+        echo "🔑 Loaded ${#loaded[@]} variable(s) from $(basename "$env_file"): ${loaded[*]}" >&2
+    fi
+    return 0
+}
+
+# Extract "Chapter N: Title" lines from an outline. Tolerates markdown/bold/bullet
+# headings and de-duplicates by chapter number, so a summary list further down the
+# outline cannot inject a chapter twice. Shared by generate_book.sh and
+# agent_book.sh — it lives here so both orchestrators cannot drift apart.
+extract_outline_chapters() {
+    local outline_file="$1"
+    local limit="$2"
+
+    grep -E '^[[:space:]]*(#+[[:space:]]*)?[*_> -]*[[:space:]]*[*_]*[Cc]hapter[[:space:]]+[0-9]+' "$outline_file" \
+        | awk -v limit="$limit" '
+            {
+                line = $0
+                sub(/^[[:space:]]*(#+[[:space:]]*)?[*_> -]*[[:space:]]*/, "", line)
+                num = line
+                sub(/^[Cc]hapter[[:space:]]+/, "", num)
+                sub(/[^0-9].*$/, "", num)
+                if (num == "" || seen[num]++) next
+                sub(/^[Cc]hapter[[:space:]]+[0-9]+/, "", line)
+                sub(/^[^[:alnum:]]+/, "", line)      # ":" / "-" / "." separator + spaces
+                sub(/[*_[:space:]]+$/, "", line)
+                printf "Chapter %s: %s\n", num, line
+                count++
+                if (count >= limit) exit
+            }'
+}
+
+# A chapter whose score is missing or below the threshold still needs work.
+# score_below_threshold <score> <threshold>
+score_below_threshold() {
+    local score="$1" threshold="${2:-8}"
+    if [ -z "$score" ] || ! [[ "$score" =~ ^[0-9]+$ ]]; then
+        return 0    # unparseable score is treated as "needs revision"
+    fi
+    [ "$score" -lt "$threshold" ]
+}
+
 # ============================================================================
 # CORE FUNCTIONS
 # ============================================================================
@@ -1232,6 +1315,102 @@ Rewrite the chapter now:"
 }
 
 # ============================================================================
+# CRITIQUE / REVISION (the "critic → reviser" part of the agent loop)
+# ============================================================================
+
+# Grade a chapter against a rubric. Prints a machine-readable report:
+#   CLARITY: 7
+#   ...
+#   OVERALL: 6
+#   FIXES:
+#   - ...
+critique_chapter_with_smart_api() {
+    local chapter_file="$1"
+    local outline_file="${2:-}"
+    local content outline_snippet=""
+    content=$(cat "$chapter_file")
+    if [ -n "$outline_file" ] && [ -f "$outline_file" ]; then
+        outline_snippet=$(head -c 2000 "$outline_file")
+    fi
+
+    local system_prompt="You are a demanding but fair developmental editor. You grade manuscript chapters against a rubric and you always give concrete, actionable fixes. You always answer in the requested machine-readable shape and never add commentary."
+
+    local user_prompt="Grade this book chapter.
+
+=== BOOK OUTLINE (context) ===
+${outline_snippet}
+
+=== CHAPTER (${chapter_file##*/}) ===
+${content}
+
+=== RUBRIC ===
+- clarity: can the reader follow the argument without re-reading?
+- specificity: concrete examples, numbers, names, steps — not vague generalities
+- audience fit: matches the target reader described in the outline
+- structure: logical section order, strong opening, no filler ending
+- originality: fresh phrasing, no boilerplate
+
+=== ANSWER FORMAT (follow exactly, nothing else) ===
+CLARITY: <0-10>
+SPECIFICITY: <0-10>
+AUDIENCE FIT: <0-10>
+STRUCTURE: <0-10>
+ORIGINALITY: <0-10>
+OVERALL: <0-10>
+FIXES:
+- <specific fix>
+- <specific fix>"
+
+    smart_api_call "$user_prompt" "$system_prompt" "analytical" 0.3 4096
+}
+
+# Echo the OVERALL score from a critique report (empty when unparseable)
+critique_overall_score() {
+    local report="$1"
+    [ -f "$report" ] || return 0
+    grep -oiE 'overall[^0-9]{0,14}([0-9]{1,2})' "$report" 2>/dev/null \
+        | grep -oE '[0-9]{1,2}' | head -1
+}
+
+# Revise a chapter so it acts on a critique report. Only replaces the chapter
+# file when the model returns usable text.
+revise_chapter_with_report() {
+    local chapter_file="$1"
+    local report_file="$2"
+    local content report
+    content=$(cat "$chapter_file")
+    report=$(cat "$report_file" 2>/dev/null)
+
+    local system_prompt="You are a developmental editor revising a book chapter to act on an editor's critique. You keep what works, fix what the critique names, and raise the level of concrete detail. You output the revised chapter body only: no preamble, no commentary, no notes about what you changed, no code fences."
+
+    local user_prompt="Revise the chapter below so it answers the critique. Keep its topic, structure and voice.
+
+=== CRITIQUE OF THIS CHAPTER ===
+${report}
+
+=== ORIGINAL CHAPTER ===
+${content}
+
+=== REQUIREMENTS ===
+- Address every FIX listed in the critique
+- Replace vague generalities with concrete examples, numbers or steps
+- Keep approximately the same length (do not pad, do not cut sections)
+- Output only the revised chapter body, starting directly with the first paragraph
+
+Write the revised chapter now:"
+
+    local result
+    if result=$(smart_api_call "$user_prompt" "$system_prompt" "creative" 0.7 8192) \
+            && [ -n "$result" ]; then
+        printf '%s\n' "$result" > "$chapter_file"
+        return 0
+    fi
+
+    echo "⚠️ Revision failed for $(basename "$chapter_file") — chapter left as it was" >&2
+    return 1
+}
+
+# ============================================================================
 # STATUS AND MONITORING
 # ============================================================================
 
@@ -1419,6 +1598,9 @@ estimate_book_cost() {
 # ============================================================================
 
 main() {
+    # Pick up keys from .env in the repo root before reporting/using providers
+    load_dotenv_if_present
+
     case "${1:-}" in
         "test")
             setup_multi_provider_system

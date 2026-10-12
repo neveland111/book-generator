@@ -148,6 +148,9 @@ esac
 source "$SCRIPT_DIR/multi_provider_ai_simple.sh" \
     || die "Cannot source multi_provider_ai_simple.sh — check scripts directory"
 
+# Pick up keys from .env in the repo root (existing environment wins)
+load_dotenv_if_present
+
 # ── Create output directory ───────────────────────────────────────────────────
 mkdir -p "$OUTPUT_DIR"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -181,31 +184,9 @@ fi
 echo "$OUTLINE_CONTENT" > "$OUTLINE_FILE"
 log "        Saved: outline.md"
 
-# Parse chapter headings tolerantly: "Chapter N: Title", "### Chapter N: Title",
-# "**Chapter N — Title**", "- Chapter N: Title". Numbers are de-duplicated so a
-# summary list further down the outline cannot inject a chapter twice.
-extract_outline_chapters() {
-    local outline_file="$1"
-    local limit="$2"
-
-    grep -E '^[[:space:]]*(#+[[:space:]]*)?[*_> -]*[[:space:]]*[*_]*[Cc]hapter[[:space:]]+[0-9]+' "$outline_file" \
-        | awk -v limit="$limit" '
-            {
-                line = $0
-                sub(/^[[:space:]]*(#+[[:space:]]*)?[*_> -]*[[:space:]]*/, "", line)
-                num = line
-                sub(/^[Cc]hapter[[:space:]]+/, "", num)
-                sub(/[^0-9].*$/, "", num)
-                if (num == "" || seen[num]++) next
-                sub(/^[Cc]hapter[[:space:]]+[0-9]+/, "", line)
-                sub(/^[^[:alnum:]]+/, "", line)      # ":" / "-" / "." separator + spaces
-                sub(/[*_[:space:]]+$/, "", line)
-                printf "Chapter %s: %s\n", num, line
-                count++
-                if (count >= limit) exit
-            }'
-}
-
+# Chapter headings are extracted with extract_outline_chapters(), which comes
+# from multi_provider_ai_simple.sh (sourced above) so both orchestrators share
+# exactly one parser.
 mapfile -t CHAPTER_LINES < <(extract_outline_chapters "$OUTLINE_FILE" "$CHAPTERS")
 
 if [[ ${#CHAPTER_LINES[@]} -eq 0 ]]; then

@@ -118,7 +118,42 @@ variables to enable them:
 - `OLLAMA` — If you run Ollama locally the scripts will try to call it for local
 	LLM generations (no key required).
 
-### 🔌 Using a custom / self-hosted provider
+### 🧭 Two Ways to Generate
+
+| | `generate_book.sh` | `agent_book.sh` |
+|---|---|---|
+| Style | batch pipeline | agent loop |
+| Steps | outline → chapters → appendices → references → originality → compile | plan → write → **critique** → **revise** → originality → compile |
+| Quality control | one pass, chapters kept as generated | every chapter graded against a rubric; anything below `--threshold` (default 8/10) is revised to act on the critique and graded again |
+| Output extras | manuscripts + exports | plus `agent_report.md` (score before/after per chapter) and `critique_chapter_NN.md` files |
+| Best for | fast drafts, short books | publishable drafts where chapter quality matters |
+
+```bash
+# Agent-style run: grade every chapter and fix the weak ones
+./scripts/agent_book.sh --topic "Slow Cooking for Busy Weeks" \
+    --chapters 8 --words-per-chapter 2000 \
+    --threshold 8 --max-revisions 1 --pen-name "Nama Anda"
+```
+
+The critique pass is a separate model call per chapter: it returns
+`CLARITY/SPECIFICITY/AUDIENCE FIT/STRUCTURE/ORIGINALITY/OVERALL` scores plus a
+`FIXES:` list, which is then fed to the revision pass. Costs roughly 2-3× the API
+calls of the batch pipeline for the same book — `--max-revisions 0` turns grading
+off and makes it behave like `generate_book.sh`.
+
+### 🔑 Environment file
+
+`generate_book.sh`, `agent_book.sh` and `multi_provider_ai_simple.sh` load `.env`
+from the repository root automatically. Existing environment variables always win,
+and only variable *names* are echoed (never values):
+
+```bash
+cp .env.example .env      # fill in GEMINI_API_KEY / ANTHROPIC_API_KEY / CUSTOM_* …
+./scripts/multi_provider_ai_simple.sh status
+# 🔑 Loaded 4 variable(s) from .env: GEMINI_API_KEY CUSTOM_API_BASE_URL …
+```
+
+
 
 Anything that speaks `POST <base>/chat/completions` with a bearer token works:
 OpenAI, OpenRouter, DeepSeek, Together, Mistral, xAI, Fireworks, LM Studio,
