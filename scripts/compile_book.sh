@@ -706,14 +706,17 @@ for chapter_num in "${OUTLINE_CHAPTERS[@]}"; do
             ;;
     esac
 
-    # Fallbacks
+    # Fallbacks — accept both plain (chapter_3.md) and zero-padded (chapter_03.md) names
     if [ -z "$primary_file" ]; then
-        for suffix in "_edited" "_final" ""; do
-            candidate="$BOOK_DIR/chapter_${chapter_num}${suffix}.md"
-            if [[ -f "$candidate" && "$candidate" != *"_review.md" && "$candidate" != *"_proofed.md" ]]; then
-                primary_file="$candidate"
-                break
-            fi
+        padded_num=$(printf "%02d" "$chapter_num" 2>/dev/null || echo "$chapter_num")
+        for stem in "$chapter_num" "$padded_num"; do
+            for suffix in "_edited" "_final" ""; do
+                candidate="$BOOK_DIR/chapter_${stem}${suffix}.md"
+                if [[ -f "$candidate" && "$candidate" != *"_review.md" && "$candidate" != *"_proofed.md" ]]; then
+                    primary_file="$candidate"
+                    break 2
+                fi
+            done
         done
     fi
 
@@ -1323,11 +1326,8 @@ BIB_FILE="$BOOK_DIR/final_bibliography.md"
 if [ -f "$BIB_FILE" ]; then
     # Copy the original bibliography into the exports directory for convenience
     cp -f "$BIB_FILE" "$EXPORTS_DIR/" 2>/dev/null || true
-else
-    echo "ℹ️ No generated bibliography found at $BIB_FILE"
-fi
 
-cat << EOF >> "$MANUSCRIPT_FILE"
+    cat << EOF >> "$MANUSCRIPT_FILE"
 \pagebreak
 \newpage
 
@@ -1340,8 +1340,10 @@ cat << EOF >> "$MANUSCRIPT_FILE"
 
 EOF
 
-
-cat "$BIB_FILE" >> "$MANUSCRIPT_FILE"
+    cat "$BIB_FILE" >> "$MANUSCRIPT_FILE"
+else
+    echo "ℹ️ No generated bibliography found at $BIB_FILE — skipping References section"
+fi
 
 cat << EOF >> "$MANUSCRIPT_FILE"
 \begin{center}
@@ -1388,7 +1390,7 @@ fi
 cat << EOF >> "$MANUSCRIPT_FILE"
 \vspace{1cm}
 
-Elara Morgan is a passionate non-fiction author who explores the intricacies of human experience and the world around us. With a gift for making complex topics accessible, she bridges the gap between academic research and everyday life, empowering readers with knowledge that is both insightful and practical. Drawing on her background in education and the humanities, she distills ideas into engaging narratives that resonate widely. Her books are praised for their clarity, warmth, and thoughtful challenges to conventional wisdom. Beyond writing, Elara finds inspiration in nature—hiking New Hampshire's trails, tending her garden, and cherishing family time in Portsmouth. These pursuits ground her while fueling her creativity, making her life and work a testament to curiosity and the joy of discovery.
+$(if [ -f "$BOOK_DIR/author_bio.md" ]; then cat "$BOOK_DIR/author_bio.md"; else echo "$AUTHOR is the author of this book. To include a full biography, add an author_bio.md file to the book directory and re-run the compile step."; fi)
 
 \vspace{2cm}
 

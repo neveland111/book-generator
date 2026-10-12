@@ -167,6 +167,11 @@ local tools and the basic ImageMagick cover-generator fallback.
 	`OPENAI_API_KEY` or other image API keys and `jq`), otherwise an ImageMagick fallback
 	Will create a simple cover.
 - `--fast` — Skip slow conversions (mobi/azw3) and some post-processing.
+- `author_bio.md` — Optional file placed in the book directory. When present its
+	contents are used for the "About the Author" page; otherwise a neutral
+	placeholder mentioning the `--author` name is inserted.
+- Missing `final_bibliography.md` — The References section is simply omitted
+	(generate it first with `generate_references.sh` if you want one).
 
 📦 Output Layout
 -------------

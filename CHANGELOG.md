@@ -25,6 +25,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Author community platform
 - AI-powered reader feedback analysis
 
+## [1.1.1] - 2026-10-12
+
+### Fixed — compile stage (the orchestrator could not finish a book)
+
+- `scripts/generate_book.sh` passed version `1.0` to `compile_book.sh`, which only
+  accepts `1|2|3`. Every run of the master pipeline therefore ended with
+  `❌ Unknown argument: 1.0` and no exports were produced. Both the call site and the
+  "compile manually" hint now use `1`.
+- `scripts/compile_book.sh` wrote the `# References` heading and then ran
+  `cat "$BIB_FILE"` unconditionally. Without a `final_bibliography.md` (the common
+  case when `--skip-references` is used or `GEMINI_API_KEY` is unset) the failing
+  `cat` aborted the script under `set -e` right after the chapters were assembled.
+  The References section is now only emitted when a bibliography file exists.
+- `scripts/compile_book.sh` chapter lookup only tried unpadded names
+  (`chapter_1.md`) while `generate_book.sh` writes zero-padded ones (`chapter_01.md`).
+  Every chapter was reported missing and only recovered by the autodetect fallback.
+  The lookup now accepts both forms.
+- `scripts/compile_book.sh` contained a hardcoded "About the Author" biography
+  (a persona unrelated to the user's book) that was appended to every compilation.
+  The bio now comes from an optional `author_bio.md` in the book directory, with a
+  neutral placeholder mentioning `--author` as fallback.
+
+### Fixed — AI layer
+
+- `scripts/multi_provider_ai_simple.sh` used `bc` for temperature range validation,
+  which is not installed by default on many systems (`bc: command not found`).
+  Replaced with `awk`, removing an undocumented dependency.
+
+### Added
+
+- `tests/generator.bats` — three regression tests for the compile stage:
+  version wiring between `generate_book.sh` and `compile_book.sh`, a minimal book
+  building to EPUB, and the compiled manuscript containing no hardcoded placeholder
+  content.
+
+### Changed
+
+- `.gitignore` — ignore `multi_provider_logs/` runtime output created by the AI layer.
+- `README.md` — document `author_bio.md` and the bibliography behaviour.
+
 ## [1.1.0] - 2025-01-01
 
 ### Phase 1: Foundation Fixes

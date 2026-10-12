@@ -258,7 +258,7 @@ if [[ "$SKIP_COMPILE" = false ]]; then
     [[ -n "$PEN_NAME" ]] && COMPILE_OPTS+=(--author "$PEN_NAME")
 
     if bash "$SCRIPT_DIR/compile_book.sh" \
-            "$BOOK_DIR" "all" "1.0" \
+            "$BOOK_DIR" "all" "1" \
             ${COMPILE_OPTS[@]+"${COMPILE_OPTS[@]}"}; then
         log "        ✓ Compilation complete"
     else
@@ -275,5 +275,5 @@ log "   📁 $BOOK_DIR"
 log "   📋 outline.md  ($ACTUAL_CHAPTERS chapters)"
 log ""
 log "To compile manually:"
-log "   ./scripts/compile_book.sh \"$BOOK_DIR\" all 1.0"
+log "   ./scripts/compile_book.sh \"$BOOK_DIR\" all 1"
 exit 0

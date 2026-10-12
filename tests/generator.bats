@@ -37,3 +37,68 @@
     command -v cat
     command -v mkdir
 }
+
+# ── Regression tests for the compile stage ────────────────────────────────────
+
+@test "generate_book.sh passes a version that compile_book.sh accepts" {
+    # compile_book.sh only accepts integer versions 1|2|3 — a dotted "1.0"
+    # used to abort the orchestrator's final compile step with an error.
+    run grep -qE '"all"[[:space:]]+"[123]"' scripts/generate_book.sh
+    [ "$status" -eq 0 ]
+
+    run grep -qE '"all"[[:space:]]+"[0-9]+\.[0-9]+"' scripts/generate_book.sh
+    [ "$status" -ne 0 ]
+}
+
+@test "compile_book.sh builds a manuscript and EPUB from a minimal book" {
+    command -v pandoc || skip "pandoc not installed"
+
+    tmp_dir=$(mktemp -d)
+    book_dir="$tmp_dir/demo-book"
+    mkdir -p "$book_dir"
+    cat > "$book_dir/outline.md" <<'EOF'
+# Test Book
+## A Subtitle
+
+### Chapter 1: First
+### Chapter 2: Second
+EOF
+    printf '# Chapter 1: First\n\nBody one.\n' > "$book_dir/chapter_01.md"
+    printf '# Chapter 2: Second\n\nBody two.\n' > "$book_dir/chapter_02.md"
+
+    run ./scripts/compile_book.sh "$book_dir" epub 1 --author "Test Author"
+    [ "$status" -eq 0 ]
+
+    # Zero-padded chapter files must be picked up without warnings (the
+    # generator writes chapter_01.md while compile used to look for chapter_1.md)
+    [[ "$output" != *"Could not find any file for chapter"* ]]
+    [[ "$output" == *"Found 2 chapters"* ]]
+
+    run bash -c "ls \"$book_dir\"/exports_*/*.epub"
+    [ "$status" -eq 0 ]
+
+    rm -rf "$tmp_dir"
+}
+
+@test "compiled manuscript has no hardcoded placeholder content" {
+    command -v pandoc || skip "pandoc not installed"
+
+    tmp_dir=$(mktemp -d)
+    book_dir="$tmp_dir/demo-book"
+    mkdir -p "$book_dir"
+    cat > "$book_dir/outline.md" <<'EOF'
+# Test Book
+
+### Chapter 1: First
+EOF
+    printf '# Chapter 1: First\n\nBody one.\n' > "$book_dir/chapter_01.md"
+
+    run ./scripts/compile_book.sh "$book_dir" epub 1 --author "Test Author"
+    [ "$status" -eq 0 ]
+
+    manuscript=$(ls "$book_dir"/manuscript_*.md | head -1)
+    ! grep -q "Elara Morgan" "$manuscript"
+    ! grep -q "^# References" "$manuscript"
+
+    rm -rf "$tmp_dir"
+}

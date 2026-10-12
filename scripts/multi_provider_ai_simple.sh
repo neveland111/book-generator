@@ -481,10 +481,10 @@ call_ollama_api() {
         fi
         
         # Ensure temperature is within valid range (0-2)
-        if (( $(echo "$temperature > 2.0" | bc -l) )); then
+        if awk "BEGIN {exit !($temperature > 2.0)}"; then
             echo "⚠️ Warning: Temperature too high ($temperature), capping at 2.0" >&2
             temperature=2.0
-        elif (( $(echo "$temperature < 0.0" | bc -l) )); then
+        elif awk "BEGIN {exit !($temperature < 0.0)}"; then
             echo "⚠️ Warning: Temperature too low ($temperature), setting to 0.1" >&2
             temperature=0.1
         fi
