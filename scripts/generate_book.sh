@@ -42,7 +42,12 @@ Options:
   --words-per-chapter N   Target words per chapter (default: 3000)
   --output-dir DIR        Parent output directory (default: ./v3)
   --pen-name NAME         Author name — overrides AUTHOR_PEN_NAME env var
-  --provider NAME         Force AI provider: gemini | ollama | groq (default: auto)
+  --provider NAME         Force one AI provider (default: auto):
+                            gemini | ollama | groq | anthropic | openai | custom
+                          "openai" and "custom" both use the OpenAI-compatible
+                          endpoint configured through CUSTOM_API_BASE_URL /
+                          CUSTOM_API_KEY / CUSTOM_MODEL (OPENAI_* also accepted).
+                          A pinned provider is never silently replaced.
   --style TEXT            Writing style (default: "engaging and informative")
   --tone TEXT             Writing tone  (default: "accessible and professional")
   --audience TEXT         Target audience (default: "general audience")
@@ -53,10 +58,18 @@ Options:
   --help                  Show this message and exit
 
 Environment variables:
-  GEMINI_API_KEY          Gemini API key   (preferred provider)
-  GROQ_API_KEY            Groq API key     (fallback)
-  OPENAI_API_KEY          OpenAI API key   (cover generation only)
+  GEMINI_API_KEY          Gemini API key        (preferred provider)
+  GROQ_API_KEY            Groq API key          (fallback)
+  ANTHROPIC_API_KEY       Anthropic (Claude) key — optional provider
+  ANTHROPIC_MODEL         Claude model name     (default: claude-sonnet-4-5)
+  CUSTOM_API_BASE_URL     Any OpenAI-compatible endpoint, e.g.
+                          https://openrouter.ai/api/v1 or http://localhost:1234/v1
+  CUSTOM_API_KEY          Key for that endpoint (local servers: any string)
+  CUSTOM_MODEL            Model name to request (default: gpt-4o-mini)
+  OPENAI_API_KEY          Alias for CUSTOM_API_KEY (plain OpenAI needs only this)
+  OPENAI_BASE_URL         Alias for CUSTOM_API_BASE_URL (e.g. https://api.openai.com/v1)
   AUTHOR_PEN_NAME         Default pen name for all books
+  SMART_API_PROVIDER      Same as --provider (auto|gemini|ollama|groq|anthropic|openai|custom)
 
 Example:
   ./scripts/generate_book.sh \\
@@ -109,7 +122,27 @@ done
 
 # Propagate optional overrides into environment
 [[ -n "$PEN_NAME" ]] && export AUTHOR_PEN_NAME="$PEN_NAME"
-[[ -n "$PROVIDER" ]] && export SMART_API_PROVIDER="$PROVIDER"
+
+if [[ -n "$PROVIDER" ]]; then
+    case "$PROVIDER" in
+        auto|gemini|ollama|groq|anthropic|openai|custom) : ;;
+        *) die "Unknown --provider '$PROVIDER'. Valid values: auto | gemini | ollama | groq | anthropic | openai | custom" ;;
+    esac
+    export SMART_API_PROVIDER="$PROVIDER"
+fi
+
+# Warn early (instead of after a failed chapter) when the pinned provider has no
+# usable configuration.
+case "${SMART_API_PROVIDER:-auto}" in
+    anthropic)
+        [[ -z "${ANTHROPIC_API_KEY:-}" ]] && die "--provider anthropic requires ANTHROPIC_API_KEY"
+        ;;
+    openai|custom)
+        if [[ -z "${CUSTOM_API_BASE_URL:-${OPENAI_BASE_URL:-}}" || -z "${CUSTOM_API_KEY:-${OPENAI_API_KEY:-}}" ]]; then
+            die "--provider $SMART_API_PROVIDER requires CUSTOM_API_BASE_URL and CUSTOM_API_KEY (or OPENAI_BASE_URL and OPENAI_API_KEY)"
+        fi
+        ;;
+esac
 
 # ── Source AI layer ───────────────────────────────────────────────────────────
 source "$SCRIPT_DIR/multi_provider_ai_simple.sh" \

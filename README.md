@@ -108,10 +108,50 @@ variables to enable them:
 - `GEMINI_API_KEY` — (recommended) Use Gemini for text-generation tasks (outlines,
 	chapters, appendices, references). The code targets Gemini models and includes
 	rate-limit handling.
-- `OPENAI_API_KEY` — Optional, used by some cover-generation and provider fallbacks.
-- `GROQ_API_KEY` — Optional alternative provider.
+- `GROQ_API_KEY` — Optional alternative provider (fast free tier).
+- `ANTHROPIC_API_KEY` — Optional. Enables Claude for text generation
+	(`ANTHROPIC_MODEL`, default `claude-sonnet-4-5`).
+- `CUSTOM_API_BASE_URL` / `CUSTOM_API_KEY` / `CUSTOM_MODEL` — Optional. Point the
+	generator at **any OpenAI-compatible endpoint**; `OPENAI_BASE_URL`,
+	`OPENAI_API_KEY` and `OPENAI_MODEL` work as aliases, so plain OpenAI needs
+	nothing but its key.
 - `OLLAMA` — If you run Ollama locally the scripts will try to call it for local
-	LLM generations.
+	LLM generations (no key required).
+
+### 🔌 Using a custom / self-hosted provider
+
+Anything that speaks `POST <base>/chat/completions` with a bearer token works:
+OpenAI, OpenRouter, DeepSeek, Together, Mistral, xAI, Fireworks, LM Studio,
+vLLM, llama.cpp's server, Ollama's own `/v1` endpoint, or your own gateway.
+
+```bash
+# OpenAI
+export OPENAI_API_KEY="sk-..."
+export OPENAI_BASE_URL="https://api.openai.com/v1"
+export OPENAI_MODEL="gpt-4o-mini"
+
+# OpenRouter (one key, many models)
+export CUSTOM_API_BASE_URL="https://openrouter.ai/api/v1"
+export CUSTOM_API_KEY="sk-or-..."
+export CUSTOM_MODEL="deepseek/deepseek-chat"
+
+# Local server (LM Studio / vLLM / llama.cpp) — key can be any non-empty string
+export CUSTOM_API_BASE_URL="http://localhost:1234/v1"
+export CUSTOM_API_KEY="local"
+export CUSTOM_MODEL="qwen2.5-7b-instruct"
+
+# Claude (its own wire format is handled separately)
+export ANTHROPIC_API_KEY="sk-ant-..."
+export ANTHROPIC_MODEL="claude-sonnet-4-5"
+
+# Then pin it (or leave it to the automatic chain):
+./scripts/generate_book.sh --topic "Your Topic" --provider custom
+```
+
+`--provider` accepts `auto | gemini | ollama | groq | anthropic | openai | custom`.
+`openai` and `custom` are the same code path (the OpenAI-compatible adapter).
+Check what is wired up with `./scripts/multi_provider_ai_simple.sh status` and
+`./scripts/multi_provider_ai_simple.sh test`.
 
 If none of the above keys are present the generator will still run but rely on
 local tools and the basic ImageMagick cover-generator fallback.
@@ -121,9 +161,17 @@ local tools and the basic ImageMagick cover-generator fallback.
 `scripts/multi_provider_ai_simple.sh` is the single choke point every AI call
 goes through (outline, chapters, appendices, references, originality checks):
 
-- **Provider order:** Gemini → local Ollama → Groq, unless you pin one with
-	`--provider gemini|ollama|groq` (or `SMART_API_PROVIDER`). Pinning is strict: a
-	pinned provider is never silently replaced by another.
+- **Provider order (auto):** Gemini → local Ollama → Groq → Anthropic → custom
+	endpoint, skipping any provider that is not configured. Pin one with
+	`--provider gemini|ollama|groq|anthropic|openai|custom` (or
+	`SMART_API_PROVIDER`). Pinning is strict: a pinned provider is never silently
+	replaced by another; if its key/URL is missing the run stops with a message
+	saying exactly what to set.
+- **A custom provider needs no code changes.** Any OpenAI-compatible endpoint
+	(OpenAI, OpenRouter, DeepSeek, Together, LM Studio, vLLM, llama.cpp, your own
+	gateway) is configurable through `CUSTOM_API_BASE_URL` / `CUSTOM_API_KEY` /
+	`CUSTOM_MODEL`. Claude is supported through its own adapter, since Anthropic
+	uses a different wire format.
 - **System prompts are real system prompts.** Gemini requests carry the
 	instruction block in `systemInstruction`; a dropped system prompt was the reason
 	generated outlines ignored the requested chapter format.

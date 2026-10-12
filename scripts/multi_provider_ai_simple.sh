@@ -249,9 +249,10 @@ function smart_api_call() {
     local provider_pref="${SMART_API_PROVIDER:-auto}"
     case "$provider_pref" in
         ""|auto) provider_pref="auto" ;;
-        gemini|groq|ollama) : ;;
+        gemini|groq|ollama|anthropic|openai|custom) : ;;
         *)
             echo "⚠️ Unknown SMART_API_PROVIDER '$provider_pref' — using auto" >&2
+            echo "   Valid values: auto | gemini | ollama | groq | anthropic | openai | custom" >&2
             provider_pref="auto"
             ;;
     esac
@@ -278,6 +279,21 @@ function smart_api_call() {
                         && [ -n "$output" ]; then
                     success=true
                     provider_used="Gemini/$model"
+                    break
+                fi
+            elif [[ "$model" == claude-* ]]; then
+                if output=$(call_anthropic_api "$prompt" "$system_prompt" "$temperature" "$max_tokens" "$model") \
+                        && [ -n "$output" ]; then
+                    success=true
+                    provider_used="Anthropic/$model"
+                    break
+                fi
+            elif custom_api_configured; then
+                # Any other model name belongs to the configured custom endpoint
+                if output=$(call_custom_api "$prompt" "$system_prompt" "$temperature" "$max_tokens" "$model") \
+                        && [ -n "$output" ]; then
+                    success=true
+                    provider_used="custom/$model"
                     break
                 fi
             else
@@ -343,6 +359,40 @@ function smart_api_call() {
             fi
         fi
 
+        # Anthropic / Claude
+        if [ "$provider_pref" = "auto" ] || [ "$provider_pref" = "anthropic" ]; then
+            if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+                echo "🔄 Trying Anthropic API (attempt $attempt/$max_retries)" >&2
+                if output=$(call_anthropic_api "$prompt" "$system_prompt" "$temperature" "$max_tokens") \
+                        && [ -n "$output" ]; then
+                    success=true
+                    provider_used="Anthropic/${ANTHROPIC_MODEL:-claude-sonnet-4-5}"
+                    break
+                fi
+                sleep 1
+            elif [ "$provider_pref" = "anthropic" ]; then
+                echo "⚠️ SMART_API_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set" >&2
+            fi
+        fi
+
+        # Custom OpenAI-compatible endpoint (OpenAI, OpenRouter, DeepSeek,
+        # Together, LM Studio, vLLM, ...)
+        if [ "$provider_pref" = "auto" ] || [ "$provider_pref" = "custom" ] || [ "$provider_pref" = "openai" ]; then
+            if custom_api_configured; then
+                echo "🔄 Trying custom OpenAI-compatible endpoint (attempt $attempt/$max_retries)" >&2
+                if output=$(call_custom_api "$prompt" "$system_prompt" "$temperature" "$max_tokens") \
+                        && [ -n "$output" ]; then
+                    success=true
+                    provider_used="custom/$(custom_api_model)"
+                    break
+                fi
+                sleep 1
+            elif [ "$provider_pref" = "custom" ] || [ "$provider_pref" = "openai" ]; then
+                echo "⚠️ SMART_API_PROVIDER=$provider_pref but no custom endpoint is configured." >&2
+                echo "   Set CUSTOM_API_BASE_URL (or OPENAI_BASE_URL), CUSTOM_API_KEY (or OPENAI_API_KEY) and CUSTOM_MODEL." >&2
+            fi
+        fi
+
         if [ "$success" = false ] && [ "$attempt" -lt "$max_retries" ]; then
             sleep 2
         fi
@@ -350,7 +400,8 @@ function smart_api_call() {
 
     if [ "$success" != true ] || [ -z "$output" ]; then
         echo "❌ No AI provider returned usable text after $max_retries attempt(s)" >&2
-        echo "   Checked: GEMINI_API_KEY, GROQ_API_KEY, local Ollama at http://localhost:11434" >&2
+        echo "   Checked: GEMINI_API_KEY, GROQ_API_KEY, ANTHROPIC_API_KEY," >&2
+        echo "            CUSTOM_API_BASE_URL (OpenAI-compatible) and local Ollama at http://localhost:11434" >&2
         echo "   Provider preference: $provider_pref" >&2
         return 1
     fi
@@ -579,6 +630,183 @@ call_groq_api() {
         echo "❌ Groq request failed (curl exit $curl_exit_code)" >&2
     else
         echo "Groq API error: $response" >&2
+    fi
+    return 1
+}
+
+# ============================================================================
+# CUSTOM PROVIDERS
+# ============================================================================
+
+# ── Generic OpenAI-compatible endpoint ───────────────────────────────────────
+# One adapter covers OpenAI, OpenRouter, DeepSeek, Together, Mistral, xAI,
+# Fireworks, LM Studio, vLLM, llama.cpp's server and anything else that speaks
+# POST <base>/chat/completions with a bearer token.
+#
+#   export CUSTOM_API_BASE_URL="https://openrouter.ai/api/v1"
+#   export CUSTOM_API_KEY="sk-or-..."
+#   export CUSTOM_MODEL="anthropic/claude-3.5-sonnet"
+#
+# OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL are accepted as aliases, so
+# plain OpenAI needs no extra variables beyond the key.
+custom_api_base_url() {
+    printf '%s' "${CUSTOM_API_BASE_URL:-${OPENAI_BASE_URL:-}}"
+}
+
+custom_api_key() {
+    printf '%s' "${CUSTOM_API_KEY:-${OPENAI_API_KEY:-}}"
+}
+
+custom_api_model() {
+    printf '%s' "${CUSTOM_MODEL:-${OPENAI_MODEL:-gpt-4o-mini}}"
+}
+
+custom_api_configured() {
+    [ -n "$(custom_api_base_url)" ] && [ -n "$(custom_api_key)" ]
+}
+
+call_custom_api() {
+    local prompt="$1"
+    local system_prompt="$2"
+    local temperature="$3"
+    local max_tokens="$4"
+    local model="${5:-}"
+
+    [[ -z "$temperature" || ! "$temperature" =~ ^[0-9]+(\.[0-9]+)?$ ]] && temperature=0.7
+    [[ -z "$max_tokens" || ! "$max_tokens" =~ ^[0-9]+$ ]] && max_tokens=8192
+
+    local base
+    base="$(custom_api_base_url)"
+    if [ -z "$base" ]; then
+        echo "❌ No custom endpoint configured — set CUSTOM_API_BASE_URL (or OPENAI_BASE_URL)" >&2
+        return 1
+    fi
+
+    local api_key
+    api_key="$(custom_api_key)"
+    if [ -z "$api_key" ]; then
+        echo "❌ No key for the custom endpoint — set CUSTOM_API_KEY (or OPENAI_API_KEY)" >&2
+        return 1
+    fi
+
+    # Accept either a base URL or the full endpoint
+    base="${base%/}"
+    local url
+    case "$base" in
+        */chat/completions) url="$base" ;;
+        *) url="$base/chat/completions" ;;
+    esac
+
+    local model_name="${model:-$(custom_api_model)}"
+
+    local payload
+    payload=$(jq -n \
+        --arg model "$model_name" \
+        --arg system "$system_prompt" \
+        --arg prompt "$prompt" \
+        --argjson temp "$temperature" \
+        --argjson max "$max_tokens" \
+        '{
+            model: $model,
+            temperature: ($temp | tonumber),
+            max_tokens: ($max | tonumber),
+            messages: (
+                (if ($system | length) > 0
+                 then [{role: "system", content: $system}]
+                 else []
+                 end)
+                + [{role: "user", content: $prompt}]
+            )
+        }')
+
+    echo "📡 Sending request to: $url (model: $model_name)" >&2
+    local response curl_exit_code text
+    response=$(curl -s --max-time 300 \
+        -H "Authorization: Bearer $api_key" \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        "$url")
+    curl_exit_code=$?
+
+    text=$(printf '%s' "$response" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+    if [ -n "$text" ]; then
+        printf '%s\n' "$text"
+        return 0
+    fi
+
+    if [ "$curl_exit_code" -ne 0 ]; then
+        echo "❌ Custom endpoint request failed (curl exit $curl_exit_code) — is $url reachable?" >&2
+    else
+        local error_message
+        error_message=$(printf '%s' "$response" | jq -r '.error.message // .error // "empty response"' 2>/dev/null)
+        echo "❌ Custom endpoint error ($model_name): $error_message" >&2
+    fi
+    return 1
+}
+
+# ── Anthropic / Claude ───────────────────────────────────────────────────────
+# Anthropic does not use the OpenAI wire format: the system prompt is a
+# top-level field, content lives in messages[].content and auth uses x-api-key
+# with a required anthropic-version header.
+call_anthropic_api() {
+    local prompt="$1"
+    local system_prompt="$2"
+    local temperature="$3"
+    local max_tokens="$4"
+    local model="${5:-}"
+
+    [[ -z "$temperature" || ! "$temperature" =~ ^[0-9]+(\.[0-9]+)?$ ]] && temperature=0.7
+    # max_tokens is mandatory for Anthropic. It is passed through as requested —
+    # the per-model ceiling is the API's call to make, and it reports a clear
+    # error when the value is too large for the chosen model.
+    [[ -z "$max_tokens" || ! "$max_tokens" =~ ^[0-9]+$ || "$max_tokens" -lt 1 ]] && max_tokens=4096
+
+    local api_key="${ANTHROPIC_API_KEY:-}"
+    if [ -z "$api_key" ]; then
+        echo "❌ ANTHROPIC_API_KEY is not set" >&2
+        return 1
+    fi
+
+    local model_name="${model:-${ANTHROPIC_MODEL:-claude-sonnet-4-5}}"
+    local url="${ANTHROPIC_BASE_URL:-https://api.anthropic.com}/v1/messages"
+
+    local payload
+    payload=$(jq -n \
+        --arg model "$model_name" \
+        --arg system "$system_prompt" \
+        --arg prompt "$prompt" \
+        --argjson temp "$temperature" \
+        --argjson max "$max_tokens" \
+        '{
+            model: $model,
+            max_tokens: ($max | tonumber),
+            temperature: ($temp | tonumber),
+            messages: [{role: "user", content: $prompt}]
+        }
+        + (if ($system | length) > 0 then {system: $system} else {} end)')
+
+    echo "📡 Sending request to: $url (model: $model_name)" >&2
+    local response curl_exit_code text
+    response=$(curl -s --max-time 300 \
+        -H "x-api-key: $api_key" \
+        -H "anthropic-version: 2023-06-01" \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        "$url")
+    curl_exit_code=$?
+
+    text=$(printf '%s' "$response" | jq -r '[.content[]? | select(.type == "text") | .text] | join("")' 2>/dev/null)
+    if [ -n "$text" ]; then
+        printf '%s\n' "$text"
+        return 0
+    fi
+
+    if [ "$curl_exit_code" -ne 0 ]; then
+        echo "❌ Anthropic request failed (curl exit $curl_exit_code) for $model_name" >&2
+    else
+        local error_message
+        error_message=$(printf '%s' "$response" | jq -r '.error.message // "empty response"' 2>/dev/null)
+        echo "❌ Anthropic API error ($model_name): $error_message" >&2
     fi
     return 1
 }
@@ -1085,14 +1313,34 @@ show_provider_status() {
     else
         echo -e "${RED}❌${RESET} Groq API - Missing key"
     fi
-    
-    if command -v ollama >/dev/null 2>&1; then
-        echo -e "${GREEN}✅${RESET} Ollama - Available"
+
+    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        echo -e "${GREEN}✅${RESET} Anthropic API - Available (model: ${ANTHROPIC_MODEL:-claude-sonnet-4-5})"
     else
-        echo -e "${RED}❌${RESET} Ollama - Not installed"
+        echo -e "${RED}❌${RESET} Anthropic API - Missing key"
     fi
-    
+
+    if custom_api_configured; then
+        echo -e "${GREEN}✅${RESET} Custom endpoint - Available"
+        echo "     URL:   $(custom_api_base_url)/chat/completions"
+        echo "     Model: $(custom_api_model)"
+    else
+        echo -e "${RED}❌${RESET} Custom endpoint - Not configured (CUSTOM_API_BASE_URL / CUSTOM_API_KEY)"
+    fi
+
+    if command -v ollama >/dev/null 2>&1; then
+        echo -e "${GREEN}✅${RESET} Ollama CLI - Available"
+    else
+        echo -e "${RED}❌${RESET} Ollama CLI - Not installed"
+    fi
+    if ollama_reachable; then
+        echo -e "${GREEN}✅${RESET} Ollama server - Reachable at http://localhost:11434"
+    else
+        echo -e "${RED}❌${RESET} Ollama server - Not answering at http://localhost:11434"
+    fi
+
     echo "────────────────────────────────────────"
+    echo "Provider preference: ${SMART_API_PROVIDER:-auto}"
 }
 
 test_all_providers() {
@@ -1122,9 +1370,29 @@ test_all_providers() {
     fi
     
     # Test Ollama
-    if command -v ollama >/dev/null 2>&1; then
+    if ollama_reachable; then
         echo -n "Testing Ollama: "
-        if call_ollama_api "$test_prompt" "$test_system" 0.7 50 >/dev/null 2>&1; then
+        if call_ollama_api "$test_prompt" "$test_system" "general" 0.7 50 1 >/dev/null 2>&1; then
+            echo -e "${GREEN}✅ Working${RESET}"
+        else
+            echo -e "${RED}❌ Failed${RESET}"
+        fi
+    fi
+
+    # Test Anthropic
+    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        echo -n "Testing Anthropic: "
+        if call_anthropic_api "$test_prompt" "$test_system" 0.7 50 >/dev/null 2>&1; then
+            echo -e "${GREEN}✅ Working${RESET}"
+        else
+            echo -e "${RED}❌ Failed${RESET}"
+        fi
+    fi
+
+    # Test the custom OpenAI-compatible endpoint
+    if custom_api_configured; then
+        echo -n "Testing custom endpoint ($(custom_api_model)): "
+        if call_custom_api "$test_prompt" "$test_system" 0.7 50 >/dev/null 2>&1; then
             echo -e "${GREEN}✅ Working${RESET}"
         else
             echo -e "${RED}❌ Failed${RESET}"

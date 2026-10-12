@@ -194,6 +194,117 @@ EOT
     [ "$(wc -l < "$CALL_LOG" | tr -d ' ')" -eq 1 ]
 }
 
+@test "custom OpenAI-compatible endpoint is used with its own URL, key and model" {
+    export CUSTOM_API_BASE_URL="https://openrouter.ai/api/v1"
+    export CUSTOM_API_KEY="sk-or-test"
+    export CUSTOM_MODEL="deepseek/deepseek-chat"
+    unset OPENAI_API_KEY OPENAI_BASE_URL OPENAI_MODEL 2>/dev/null || true
+
+    # capture the full curl invocation (URL + headers) and return a reply
+    curl() {
+        printf '%s\n' "$*" > "$BATS_TEST_TMPDIR/curl_args.txt"
+        local body=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -d) body="$2"; shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        printf '%s' "$body" > "$PAYLOAD_FILE"
+        printf '%s' '{"choices":[{"message":{"content":"Custom endpoint text."}}]}'
+    }
+
+    run silenced call_custom_api "PROMPT" "SYSTEM" 0.7 1234
+    [ "$status" -eq 0 ]
+    [ "$output" = "Custom endpoint text." ]
+
+    run cat "$BATS_TEST_TMPDIR/curl_args.txt"
+    [[ "$output" == *"https://openrouter.ai/api/v1/chat/completions"* ]]
+    [[ "$output" == *"Authorization: Bearer sk-or-test"* ]]
+
+    run jq -r '.model' "$PAYLOAD_FILE"
+    [ "$output" = "deepseek/deepseek-chat" ]
+    run jq -r '.messages[0].role' "$PAYLOAD_FILE"
+    [ "$output" = "system" ]
+    run jq -r '.messages[1].content' "$PAYLOAD_FILE"
+    [ "$output" = "PROMPT" ]
+}
+
+@test "a full chat/completions URL is not doubled up" {
+    export CUSTOM_API_BASE_URL="http://localhost:1234/v1/chat/completions"
+    export CUSTOM_API_KEY="not-needed"
+    export CUSTOM_MODEL="local-model"
+
+    curl() {
+        printf '%s\n' "$*" > "$BATS_TEST_TMPDIR/curl_args.txt"
+        printf '%s' '{"choices":[{"message":{"content":"Local text."}}]}'
+    }
+
+    run silenced call_custom_api "PROMPT" "SYSTEM" 0.7 100
+    [ "$status" -eq 0 ]
+
+    run cat "$BATS_TEST_TMPDIR/curl_args.txt"
+    [[ "$output" == *"http://localhost:1234/v1/chat/completions"* ]]
+    [[ "$output" != *"chat/completions/chat/completions"* ]]
+}
+
+@test "Anthropic requests use the messages format and x-api-key header" {
+    export ANTHROPIC_API_KEY="sk-ant-test"
+    export ANTHROPIC_MODEL="claude-sonnet-4-5"
+
+    curl() {
+        printf '%s\n' "$*" > "$BATS_TEST_TMPDIR/curl_args.txt"
+        local body=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -d) body="$2"; shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        printf '%s' "$body" > "$PAYLOAD_FILE"
+        printf '%s' '{"content":[{"type":"text","text":"Claude text."}]}'
+    }
+
+    run silenced call_anthropic_api "PROMPT" "SYSTEM" 0.7 1000
+    [ "$status" -eq 0 ]
+    [ "$output" = "Claude text." ]
+
+    run cat "$BATS_TEST_TMPDIR/curl_args.txt"
+    [[ "$output" == *"https://api.anthropic.com/v1/messages"* ]]
+    [[ "$output" == *"x-api-key: sk-ant-test"* ]]
+    [[ "$output" == *"anthropic-version: 2023-06-01"* ]]
+
+    run jq -r '.model' "$PAYLOAD_FILE"
+    [ "$output" = "claude-sonnet-4-5" ]
+    # Anthropic takes the system prompt as a top-level field, not as a message
+    run jq -r '.system' "$PAYLOAD_FILE"
+    [ "$output" = "SYSTEM" ]
+    run jq -r '.messages | length' "$PAYLOAD_FILE"
+    [ "$output" = "1" ]
+    run jq -r '.max_tokens' "$PAYLOAD_FILE"
+    [ "$output" = "1000" ]
+}
+
+@test "anthropic and custom can be pinned with SMART_API_PROVIDER" {
+    export ANTHROPIC_API_KEY="sk-ant-test"
+    curl() {
+        printf '%s\n' "$*" >> "$CALL_LOG"
+        printf '%s' '{"content":[{"type":"text","text":"pinned"}]}'
+    }
+    export SMART_API_PROVIDER=anthropic
+    run silenced smart_api_call "p" "s" "general" 0.7 100 1
+    [ "$status" -eq 0 ]
+    [ "$output" = "pinned" ]
+    run cat "$CALL_LOG"
+    [[ "$output" == *"api.anthropic.com"* ]]
+
+    # custom pinned without configuration must fail instead of silently using Gemini
+    export SMART_API_PROVIDER=custom
+    gemini_reply "SHOULD-NOT-BE-USED"
+    run silenced smart_api_call "p" "s" "general" 0.7 100 1
+    [ "$status" -ne 0 ]
+}
+
 @test "plagiarism scores are parsed numerically" {
     chapter="$BATS_TEST_TMPDIR/chapter.md"
     echo "Some chapter text." > "$chapter"

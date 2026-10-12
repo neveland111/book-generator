@@ -25,6 +25,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Author community platform
 - AI-powered reader feedback analysis
 
+## [1.3.0] - 2026-10-12
+
+### Added — pluggable providers
+
+- **Any OpenAI-compatible endpoint can now drive book generation.** New
+	`call_custom_api` adapter plus `custom_api_base_url` / `custom_api_key` /
+	`custom_api_model` helpers, configured with `CUSTOM_API_BASE_URL`,
+	`CUSTOM_API_KEY` and `CUSTOM_MODEL` (`OPENAI_BASE_URL`, `OPENAI_API_KEY`,
+	`OPENAI_MODEL` are accepted as aliases, so plain OpenAI needs only its key).
+	Covers OpenAI, OpenRouter, DeepSeek, Together, Mistral, xAI, Fireworks,
+	LM Studio, vLLM, llama.cpp's server and any self-hosted gateway. A base URL
+	may be given with or without the trailing `/chat/completions`.
+- **Anthropic / Claude support** (`call_anthropic_api`), which was previously
+	listed in `.env.example` but implemented nowhere. Anthropic does not use the
+	OpenAI wire format: the system prompt is a top-level field and auth is
+	`x-api-key` + `anthropic-version`. Model selectable with `ANTHROPIC_MODEL`
+	(default `claude-sonnet-4-5`), endpoint overridable with `ANTHROPIC_BASE_URL`.
+- `--provider` / `SMART_API_PROVIDER` now accept
+	`auto | gemini | ollama | groq | anthropic | openai | custom`; the automatic
+	chain is Gemini → local Ollama → Groq → Anthropic → custom, skipping providers
+	that are not configured. A pinned provider whose configuration is missing stops
+	the run immediately with an actionable message instead of silently using
+	another provider.
+- `generate_book.sh` validates `--provider` before any AI work starts and checks
+	the required environment variables for `anthropic` / `openai` / `custom`.
+- `multi_provider_ai_simple.sh status` now reports Anthropic, the custom endpoint
+	(URL + model) and whether the Ollama *server* answers — previously it only
+	checked for the `ollama` binary. `test` probes the new providers too, and the
+	Ollama probe was fixed (it called `call_ollama_api` with the wrong argument
+	order).
+- `.env.example` documents every provider, including ready-to-copy blocks for
+	OpenRouter, DeepSeek, LM Studio and OpenAI.
+- `tests/ai_layer.bats` — 4 new offline tests: custom-endpoint URL/key/model and
+	message order, full `chat/completions` URLs not being doubled up, Anthropic's
+	payload shape and headers, and pinning `anthropic`/`custom`.
+
+### Fixed
+
+- `call_anthropic_api` no longer clamps `max_tokens` to a 1,024-16,000 range; the
+	per-model ceiling is the API's decision and a small value (e.g. a 50-token
+	health check) is legitimate.
+
 ## [1.2.0] - 2026-10-12
 
 ### Fixed — AI layer (`scripts/multi_provider_ai_simple.sh`)
