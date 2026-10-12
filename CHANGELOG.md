@@ -25,6 +25,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Author community platform
 - AI-powered reader feedback analysis
 
+## [1.4.0] - 2026-10-12
+
+### Fixed — bundled sample artwork leaked into every book
+
+`compile_book.sh` copied the repository's own images into every compilation and
+referenced them from the manuscript, so each generated book contained **another
+publisher's logo** (`speedy-quick-publishing-logo.png`, shown on the copyright
+page), a decorative `icon.png` in the front matter, an author photo of a stranger
+and unconditional references to `back-cover-1.png` / `back-cover.png` (the back
+covers of the two books published with this toolkit). For anyone cloning the
+repository, that is both unprofessional and a copyright problem — the finished
+EPUB embedded a stranger's logo.
+
+- Artwork is now **opt-in**: `--author-photo`, `--logo`, `--icon`, `--backcover`
+	(or `AUTHOR_PHOTO`, `PUBLISHER_LOGO`, `BOOK_ICON`, `BACK_COVER`). A back cover
+	sitting in the book directory is still detected automatically.
+- Every compilation prints an `🖼️  Artwork included:` summary listing exactly what
+	will appear in the book, so nothing arrives in a book by accident.
+- With no artwork supplied, the EPUB now contains **no images** and pandoc no
+	longer reports `Could not fetch resource back-cover-1.png`.
+- The author-photo insert checked `-f "$AUTHOR_PHOTO_BASENAME"` against the current
+	working directory instead of the exports directory, so the photo was copied but
+	never placed; the check now targets the real path.
+- `README.md` documents the opt-in behaviour; `tests/generator.bats` gained two
+	regression tests (a book compiled without artwork contains no media and no
+	stock-artwork references; artwork passed on the command line is included).
+
 ## [1.3.0] - 2026-10-12
 
 ### Added — pluggable providers

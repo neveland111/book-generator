@@ -248,6 +248,14 @@ goes through (outline, chapters, appendices, references, originality checks):
 - `author_bio.md` — Optional file placed in the book directory. When present its
 	contents are used for the "About the Author" page; otherwise a neutral
 	placeholder mentioning the `--author` name is inserted.
+- **Artwork is opt-in.** Nothing from the repository's `scripts/` folder is
+	embedded into your book. Supply your own files with `--author-photo`, `--logo`,
+	`--icon` and `--backcover` (or the `AUTHOR_PHOTO`, `PUBLISHER_LOGO`, `BOOK_ICON`,
+	`BACK_COVER` environment variables). A back cover placed inside the book
+	directory (`back-cover.png`, `backcover.jpg`, …) is picked up automatically.
+	The compile step prints which artwork it included, e.g.
+	`icon: (none) / logo: logo.png / author photo: (none) / back cover: (none)`.
+	Without any artwork the EPUB simply contains no images — no broken references.
 - Missing `final_bibliography.md` — The References section is simply omitted
 	(generate it first with `generate_references.sh` if you want one).
 

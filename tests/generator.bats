@@ -103,6 +103,73 @@ EOF
     rm -rf "$tmp_dir"
 }
 
+@test "compiled books ship no bundled sample artwork" {
+    command -v pandoc || skip "pandoc not installed"
+
+    # The repository ships artwork belonging to the books published with this
+    # toolkit (publisher logo, book icon, back covers of other books). It used to
+    # be copied into every compilation; nothing may end up in a user's book
+    # unless the user supplies their own file.
+    tmp_dir=$(mktemp -d)
+    book_dir="$tmp_dir/demo-book"
+    mkdir -p "$book_dir"
+    cat > "$book_dir/outline.md" <<'EOF'
+# Stock Asset Check
+
+### Chapter 1: One
+EOF
+    printf '# Chapter 1: One\n\nBody.\n' > "$book_dir/chapter_01.md"
+
+    run ./scripts/compile_book.sh "$book_dir" epub 1 --author "Test Author"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Could not fetch resource"* ]]
+    [[ "$output" == *"icon:        (none)"* ]]
+
+    manuscript=$(ls "$book_dir"/manuscript_*.md | head -1)
+    ! grep -q "speedy-quick-publishing" "$manuscript"
+    ! grep -q "back-cover-1.png" "$manuscript"
+
+    # No images at all inside the EPUB when the user provided none
+    run bash -c "python3 - '$book_dir' <<'PY'
+import sys, glob, zipfile
+f = glob.glob(sys.argv[1] + '/exports_*/*.epub')[0]
+names = zipfile.ZipFile(f).namelist()
+print([n for n in names if '/media/' in n])
+PY"
+    [ "$output" = "[]" ]
+
+    rm -rf "$tmp_dir"
+}
+
+@test "artwork provided by the author is included" {
+    command -v pandoc || skip "pandoc not installed"
+    command -v convert || skip "imagemagick not installed"
+
+    tmp_dir=$(mktemp -d)
+    book_dir="$tmp_dir/demo-book"
+    mkdir -p "$book_dir"
+    cat > "$book_dir/outline.md" <<'EOF'
+# My Book
+
+### Chapter 1: One
+EOF
+    printf '# Chapter 1: One\n\nBody.\n' > "$book_dir/chapter_01.md"
+    convert -size 300x300 xc:'#2b6cb0' "$tmp_dir/penulis.png"
+    convert -size 300x120 xc:'#1a202c' "$tmp_dir/logo.png"
+
+    run ./scripts/compile_book.sh "$book_dir" epub 1 \
+        --author "Test Author" --author-photo "$tmp_dir/penulis.png" --logo "$tmp_dir/logo.png"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"author photo: penulis.png"* ]]
+    [[ "$output" == *"logo:        logo.png"* ]]
+
+    manuscript=$(ls "$book_dir"/manuscript_*.md | head -1)
+    grep -q "penulis.png" "$manuscript"
+    grep -q "logo.png" "$manuscript"
+
+    rm -rf "$tmp_dir"
+}
+
 @test "compiled manuscript has no hardcoded placeholder content" {
     command -v pandoc || skip "pandoc not installed"
 

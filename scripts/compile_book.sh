@@ -86,6 +86,9 @@ OPTIONS:
     --publisher "name" - Set publisher name
     --year "YYYY"     - Publication year (default: current year)
     --generate-cover  - Auto-generate a simple cover if none provided
+    --author-photo "path" - Photo for the About the Author page (optional)
+    --logo "path"     - Publisher logo shown on the copyright page (optional)
+    --icon "path"     - Small decorative image for the front matter (optional)
 
 EXAMPLES:
     $0                        # Auto-detect most recent book
@@ -488,6 +491,18 @@ while [[ $# -gt 0 ]]; do
             BACK_COVER_IMAGE="$2"
             shift 2
             ;;
+        --author-photo)
+            AUTHOR_PHOTO="$2"
+            shift 2
+            ;;
+        --logo)
+            PUBLISHER_LOGO="$2"
+            shift 2
+            ;;
+        --icon)
+            BOOK_ICON="$2"
+            shift 2
+            ;;
         --isbn)
             ISBN="$2"
             shift 2
@@ -748,55 +763,65 @@ MANUSCRIPT_FILE="${BOOK_DIR}/manuscript_${VERSION_NAME}_${TIMESTAMP}.md"
 EXPORTS_DIR="${BOOK_DIR}/exports_${TIMESTAMP}"
 mkdir -p "$EXPORTS_DIR"
 
-# Copy publisher logo into exports dir for inclusion in manuscript (small logo on title/copyright pages)
-PUBLISHER_LOGO_SRC="$SCRIPT_DIR/speedy-quick-publishing-logo.png"
-if [ -f "$PUBLISHER_LOGO_SRC" ]; then
-    cp -f "$PUBLISHER_LOGO_SRC" "$EXPORTS_DIR/$(basename "$PUBLISHER_LOGO_SRC")" 2>/dev/null || true
-fi
-# Basename for referencing the logo in the manuscript and exports
-LOGO_BASENAME="$(basename "$PUBLISHER_LOGO_SRC")"
+# ── Optional book assets ─────────────────────────────────────────────────────
+# These are all opt-in. The repository ships sample artwork belonging to the
+# books that were published with this toolkit (publisher logo, book icon, author
+# photo, back covers); embedding them into somebody else's book would be both
+# unprofessional and a copyright problem. So nothing is included unless you point
+# at your own file — with a flag or an environment variable.
+#
+#   --author-photo photo.jpg   |  AUTHOR_PHOTO=photo.jpg
+#   --logo logo.png            |  PUBLISHER_LOGO=logo.png
+#   --icon icon.png            |  BOOK_ICON=icon.png
+#   --backcover back.png       |  BACK_COVER=back.png
+#
+# Files are copied into the exports directory and referenced by name.
 
-# Copy author photo into exports dir for inclusion in manuscript
-AUTHOR_PHOTO_SRC="$SCRIPT_DIR/author-photo.png"
-if [ -f "$AUTHOR_PHOTO_SRC" ]; then
-    cp -f "$AUTHOR_PHOTO_SRC" "$EXPORTS_DIR/$(basename "$AUTHOR_PHOTO_SRC")" 2>/dev/null || true
-fi
-AUTHOR_PHOTO_BASENAME="$(basename "$AUTHOR_PHOTO_SRC")"
+copy_book_asset() { # copy_book_asset <source path> <target dir> <env var name for warning>
+    local src="$1" dest_dir="$2" label="$3"
+    [ -z "$src" ] && return 0
+    if [ ! -f "$src" ]; then
+        echo "⚠️  $label not found: $src — ignoring" >&2
+        return 1
+    fi
+    mkdir -p "$dest_dir"
+    cp -f "$src" "$dest_dir/$(basename "$src")" 2>/dev/null || true
+    return 0
+}
 
-# Copy icon photo into exports dir for inclusion in manuscript
-ICON_PHOTO_SRC="$SCRIPT_DIR/icon.png"
-if [ -f "$ICON_PHOTO_SRC" ]; then
-    cp -f "$ICON_PHOTO_SRC" "$EXPORTS_DIR/$(basename "$ICON_PHOTO_SRC")" 2>/dev/null || true
-fi
-ICON_BASENAME="$(basename "$ICON_PHOTO_SRC")"
+ICON_PHOTO_SRC="${BOOK_ICON:-}"
+LOGO_SRC="${PUBLISHER_LOGO:-}"
+AUTHOR_PHOTO_SRC="${AUTHOR_PHOTO:-}"
+BACK_COVER_SRC="${BACK_COVER_IMAGE:-${BACK_COVER:-}}"
 
-# Copy the QR code image into exports dir for inclusion in manuscript
-QR_CODE_SRC="$SCRIPT_DIR/qr-code.png"
-if [ -f "$QR_CODE_SRC" ]; then
-    cp -f "$QR_CODE_SRC" "$EXPORTS_DIR/$(basename "$QR_CODE_SRC")" 2>/dev/null || true
-fi
-QR_CODE="$(basename "$QR_CODE_SRC")"
+copy_book_asset "$ICON_PHOTO_SRC"   "$EXPORTS_DIR" "Book icon"     || ICON_PHOTO_SRC=""
+copy_book_asset "$LOGO_SRC"         "$EXPORTS_DIR" "Publisher logo" || LOGO_SRC=""
+copy_book_asset "$AUTHOR_PHOTO_SRC" "$EXPORTS_DIR" "Author photo"  || AUTHOR_PHOTO_SRC=""
 
-# Copy the back cover pdf into exports dir for inclusion in manuscript
-BACK_COVER_PDF_SRC="$SCRIPT_DIR/back-cover.png"
-if [ -f "$BACK_COVER_PDF_SRC" ]; then
-    cp -f "$BACK_COVER_PDF_SRC" "$EXPORTS_DIR/$(basename "$BACK_COVER_PDF_SRC")" 2>/dev/null || true
-fi
-BACK_COVER_PDF_BASENAME="$(basename "$BACK_COVER_PDF_SRC")"
+ICON_BASENAME="$(basename "${ICON_PHOTO_SRC:-}")"
+LOGO_BASENAME="$(basename "${LOGO_SRC:-}")"
+AUTHOR_PHOTO_BASENAME="$(basename "${AUTHOR_PHOTO_SRC:-}")"
 
-# Copy back cover 1 image into exports dir for inclusion in manuscript
-BACK_COVER1_SRC="$SCRIPT_DIR/back-cover-1.png"
-if [ -f "$BACK_COVER1_SRC" ]; then
-    cp -f "$BACK_COVER1_SRC" "$EXPORTS_DIR/$(basename "$BACK_COVER1_SRC")" 2>/dev/null || true
+# Back cover: prefer the file given with --backcover / BACK_COVER, else look for a
+# back cover that lives inside the book directory.
+BACK_COVER_BASENAME=""
+if [ -n "$BACK_COVER_SRC" ] && copy_book_asset "$BACK_COVER_SRC" "$EXPORTS_DIR" "Back cover"; then
+    BACK_COVER_BASENAME="$(basename "$BACK_COVER_SRC")"
+else
+    for candidate in "$BOOK_DIR"/back-cover*.png "$BOOK_DIR"/back-cover*.jpg "$BOOK_DIR"/backcover*.png "$BOOK_DIR"/backcover*.jpg; do
+        if [ -f "$candidate" ]; then
+            BACK_COVER_BASENAME="$(basename "$candidate")"
+            break
+        fi
+    done
 fi
-BACK_COVER1_BASENAME="$(basename "$BACK_COVER1_SRC")"
 
-# Copy cover 1 image into exports dir for inclusion in manuscript
-COVER1_SRC="$SCRIPT_DIR/cover-1.png"
-if [ -f "$COVER1_SRC" ]; then
-    cp -f "$COVER1_SRC" "$EXPORTS_DIR/$(basename "$COVER1_SRC")" 2>/dev/null || true
-fi
-COVER1_BASENAME="$(basename "$COVER1_SRC")"
+# Let the reader know exactly what artwork will end up in the book
+echo "🖼️  Artwork included:"
+[ -n "$ICON_BASENAME" ]         && echo "     icon:        $ICON_BASENAME"         || echo "     icon:        (none)"
+[ -n "$LOGO_BASENAME" ]         && echo "     logo:        $LOGO_BASENAME"         || echo "     logo:        (none)"
+[ -n "$AUTHOR_PHOTO_BASENAME" ] && echo "     author photo: $AUTHOR_PHOTO_BASENAME" || echo "     author photo: (none)"
+[ -n "$BACK_COVER_BASENAME" ]   && echo "     back cover:  $BACK_COVER_BASENAME"   || echo "     back cover:  (none)"
 
 echo "📑 Creating manuscript: $(basename "$MANUSCRIPT_FILE")"
 
@@ -1335,8 +1360,8 @@ cat << EOF >> "$MANUSCRIPT_FILE"
 ::: 
 EOF
 
-# Insert image using raw LaTeX if it exists
-if [ -f "$AUTHOR_PHOTO_BASENAME" ]; then
+# Insert the author photo only when the user supplied one
+if [ -n "$AUTHOR_PHOTO_BASENAME" ] && [ -f "$EXPORTS_DIR/$AUTHOR_PHOTO_BASENAME" ]; then
   cat << EOF >> "$MANUSCRIPT_FILE"
 
 ::: {.centered}
@@ -1391,26 +1416,29 @@ All intellectual property rights, including copyrights, in this book are owned b
 ::: {.pagebreak}
 :::
 
-<!-- LaTeX/PDF only - back covers -->
+EOF
+
+# Back-cover page — only when the book actually has a back cover image. The old
+# version always referenced back-cover-1.png/back-cover.png, which produced
+# "Could not fetch resource" warnings and dead <img> tags in every EPUB.
+if [ -n "$BACK_COVER_BASENAME" ] && [ -f "$EXPORTS_DIR/$BACK_COVER_BASENAME" ]; then
+    cat << EOF >> "$MANUSCRIPT_FILE"
+<!-- LaTeX/PDF only - back cover -->
 \pagenumbering{gobble}
 \newgeometry{margin=0mm,top=0mm,bottom=0mm,left=0mm,right=0mm}
 \begin{center}
-\includegraphics[width=\paperwidth,height=\paperheight,keepaspectratio=false]{back-cover-1.png}
-\includegraphics[width=\paperwidth,height=\paperheight,keepaspectratio=false]{back-cover.png}
+\includegraphics[width=\paperwidth,height=\paperheight,keepaspectratio=false]{$BACK_COVER_BASENAME}
 \end{center}
 \restoregeometry
 
 <!-- EPUB_ONLY_BEGIN -->
 <div class="backcover-container">
-![](back-cover-1.png){width=100% height=100vh}
-</div>
-
-<div class="backcover-container">
-![](back-cover.png){width=100% height=100vh}
+![]($BACK_COVER_BASENAME){width=100% height=100vh}
 </div>
 <!-- EPUB_ONLY_END -->
 
 EOF
+fi
 
 # If a back cover was generated, include it as the final page
 # if [ -n "$BACK_COVER" ] && [ -f "$BACK_COVER" ]; then
