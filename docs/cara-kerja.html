@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>book-generator — Cara Kerja, Keamanan Pakai, &amp; Peluang Mode Agent</title>
+<style>
+  :root{
+    --bg:#0b1020; --bg2:#111834; --card:#151d3b; --card2:#1b2547;
+    --line:#27325c; --tx:#e8ecf8; --tx2:#a8b3d4; --tx3:#7b87ad;
+    --grn:#34d399; --yel:#fbbf24; --red:#f87171; --blu:#60a5fa; --pur:#a78bfa; --cyn:#22d3ee;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:radial-gradient(1200px 600px at 15% -10%,#1b2450 0%,transparent 60%),
+                       radial-gradient(900px 500px at 100% 0%,#17233f 0%,transparent 55%), var(--bg);
+    color:var(--tx); font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 22px 90px}
+  header.hero{border-bottom:1px solid var(--line);padding-bottom:26px;margin-bottom:34px}
+  .kicker{color:var(--cyn);font-family:var(--mono);font-size:13px;letter-spacing:.14em;text-transform:uppercase}
+  h1{font-size:clamp(28px,4.4vw,44px);line-height:1.15;margin:10px 0 12px}
+  h1 .grad{background:linear-gradient(90deg,var(--cyn),var(--pur) 55%,var(--blu));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:var(--tx2);max-width:70ch;font-size:17px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .chip{font-family:var(--mono);font-size:12px;padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--tx2)}
+  .chip.ok{border-color:rgba(52,211,153,.45);color:var(--grn)}
+  .chip.warn{border-color:rgba(251,191,36,.45);color:var(--yel)}
+  .chip.bad{border-color:rgba(248,113,113,.45);color:var(--red)}
+
+  nav.toc{position:sticky;top:0;z-index:5;backdrop-filter:blur(10px);background:rgba(11,16,32,.82);
+          border-bottom:1px solid var(--line);margin:0 -22px 34px;padding:10px 22px;display:flex;gap:6px;overflow-x:auto}
+  nav.toc a{color:var(--tx2);text-decoration:none;font-size:13px;font-family:var(--mono);padding:6px 10px;border-radius:8px;white-space:nowrap}
+  nav.toc a:hover{background:var(--card2);color:var(--tx)}
+
+  section{margin:0 0 46px}
+  h2{font-size:24px;margin:0 0 6px;display:flex;align-items:center;gap:10px}
+  h2 .n{font-family:var(--mono);font-size:13px;color:var(--bg);background:linear-gradient(135deg,var(--cyn),var(--pur));
+        border-radius:8px;padding:3px 9px;font-weight:700}
+  h3{font-size:17px;margin:24px 0 8px;color:var(--tx)}
+  p{margin:10px 0;color:var(--tx2)}
+  strong{color:var(--tx)}
+  code{font-family:var(--mono);font-size:13.5px;background:#0e1531;border:1px solid var(--line);
+       padding:1.5px 6px;border-radius:6px;color:#cfe3ff}
+  pre{background:#0a0f24;border:1px solid var(--line);border-radius:12px;padding:14px 16px;overflow:auto;
+      font-family:var(--mono);font-size:13px;line-height:1.6;color:#cfe3ff}
+  pre .c{color:var(--tx3)}
+  pre .k{color:var(--pur)}
+  pre .s{color:var(--grn)}
+
+  .grid{display:grid;gap:16px}
+  @media(min-width:760px){ .grid.two{grid-template-columns:1fr 1fr} .grid.three{grid-template-columns:repeat(3,1fr)} }
+  .card{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+  .card h4{margin:0 0 6px;font-size:15px}
+  .card p{margin:6px 0 0;font-size:14.5px}
+  .card .tag{font-family:var(--mono);font-size:11.5px;color:var(--tx3)}
+
+  /* pipeline */
+  .pipe{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;margin:18px 0}
+  .step{flex:1 1 148px;min-width:148px;background:linear-gradient(180deg,var(--card),var(--card2));
+        border:1px solid var(--line);border-radius:12px;padding:12px}
+  .step .num{font-family:var(--mono);font-size:11px;color:var(--cyn)}
+  .step .ttl{font-weight:600;font-size:14.5px;margin:2px 0 4px}
+  .step .out{font-family:var(--mono);font-size:11.5px;color:var(--tx3);word-break:break-word}
+  .arrow{align-self:center;color:var(--tx3);font-size:18px}
+  @media(max-width:700px){ .arrow{display:none} }
+
+  /* chain */
+  .chain{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:14px 0}
+  .node{font-family:var(--mono);font-size:12.5px;padding:7px 11px;border-radius:10px;border:1px solid var(--line);background:var(--card)}
+  .node.g{border-color:rgba(52,211,153,.5);color:var(--grn)}
+  .node.b{border-color:rgba(96,165,250,.5);color:var(--blu)}
+  .node.p{border-color:rgba(167,139,250,.5);color:var(--pur)}
+  .node.y{border-color:rgba(251,191,36,.5);color:var(--yel)}
+
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14.5px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--tx);font-size:13px;text-transform:uppercase;letter-spacing:.06em}
+  td{color:var(--tx2)}
+  tbody tr:hover{background:rgba(255,255,255,.02)}
+  .st{font-family:var(--mono);font-size:12px;white-space:nowrap}
+  .st.ok{color:var(--grn)} .st.warn{color:var(--yel)} .st.bad{color:var(--red)}
+
+  .note{border-left:3px solid var(--blu);background:rgba(96,165,250,.08);padding:12px 16px;border-radius:0 10px 10px 0;margin:16px 0}
+  .note.warn{border-color:var(--yel);background:rgba(251,191,36,.08)}
+  .note.bad{border-color:var(--red);background:rgba(248,113,113,.08)}
+  .note.ok{border-color:var(--grn);background:rgba(52,211,153,.08)}
+  .note p{margin:4px 0;color:var(--tx)}
+
+  ul.clean{list-style:none;padding-left:0}
+  ul.clean li{padding-left:26px;position:relative;margin:7px 0;color:var(--tx2)}
+  ul.clean li:before{content:"▸";position:absolute;left:8px;color:var(--cyn)}
+  ul.check li:before{content:"✓";color:var(--grn);font-weight:700}
+  ul.cross li:before{content:"✕";color:var(--red);font-weight:700}
+
+  .agentmap{display:grid;gap:12px;margin:16px 0}
+  .lane{border:1px dashed var(--line);border-radius:12px;padding:12px 14px;background:rgba(255,255,255,.015)}
+  .lane .lbl{font-family:var(--mono);font-size:11.5px;color:var(--tx3);margin-bottom:8px}
+  .row{display:flex;flex-wrap:wrap;gap:8px}
+
+  footer{border-top:1px solid var(--line);margin-top:40px;padding-top:20px;color:var(--tx3);font-size:13.5px}
+  a{color:var(--blu)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="kicker">neveland111 / book-generator — hasil audit &amp; perbaikan</div>
+  <h1>Bagaimana <span class="grad">pipeline buku AI</span> ini bekerja, seaman apa dipakai, dan di mana posisi “agent”</h1>
+  <p class="sub">
+    Dokumen ini menjelaskan alur kerja repo <code>book-generator</code> setelah 4 putaran perbaikan
+    (v1.1.1 → v1.4.0), apa yang sudah aman untuk langsung dipakai, apa yang masih wajib Anda siapkan
+    sendiri untuk kualitas profesional, serta bagaimana repo ini bisa <em>dikombinasikan dengan agent</em>
+    (Claude Code, Cursor, n8n, LangGraph, dsb.).
+  </p>
+  <div class="meta">
+    <span class="chip ok">26 tes otomatis lulus</span>
+    <span class="chip ok">5 commit perbaikan</span>
+    <span class="chip">pandoc · LaTeX · ImageMagick · jq</span>
+    <span class="chip warn">butuh API key untuk teks</span>
+    <span class="chip bad">tanpa LICENSE file</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#alur">① Alur kerja</a>
+  <a href="#provider">② Lapisan AI &amp; provider custom</a>
+  <a href="#gerbang">③ Gerbang kualitas</a>
+  <a href="#aman">④ Aman dipakai?</a>
+  <a href="#pro">⑤ Sekelas profesional?</a>
+  <a href="#agent">⑥ Mode agent / enhancer</a>
+  <a href="#mulai">⑦ Mulai cepat</a>
+</nav>
+
+<!-- ══════════════ 1. ALUR ══════════════ -->
+<section id="alur">
+  <h2><span class="n">01</span> Alur kerja: dari topik ke EPUB</h2>
+  <p>
+    Semuanya dikendalikan satu skrip orkestrator, <code>scripts/generate_book.sh</code>, yang menjalankan
+    6 langkah berurutan. Setiap langkah menulis file nyata ke disk, jadi Anda bisa berhenti, memeriksa,
+    mengedit, lalu melanjutkan tanpa mengulang dari nol.
+  </p>
+
+  <div class="pipe">
+    <div class="step"><div class="num">[1/6]</div><div class="ttl">Outline</div><div class="out">outline.md</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="num">[2/6]</div><div class="ttl">Tulis bab</div><div class="out">chapter_01.md … chapter_NN.md</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="num">[3/6]</div><div class="ttl">Appendices</div><div class="out">preface, glossary, epilogue…</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="num">[4/6]</div><div class="ttl">Bibliografi</div><div class="out">final_bibliography.md</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="num">[5/6]</div><div class="ttl">Cek orisinalitas</div><div class="out">skor per bab → laporan</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="num">[6/6]</div><div class="ttl">Compile</div><div class="out">EPUB · HTML · MD · (PDF)</div></div>
+  </div>
+
+  <h3>Yang terjadi di setiap langkah</h3>
+  <table>
+    <thead><tr><th>Langkah</th><th>Proses</th><th>Output</th><th>Catatan</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>1 · Outline</strong></td>
+        <td>Model diberi topik + genre + audiens + <em>jumlah bab dan target kata persis</em> seperti argumen CLI, lalu mengembalikan struktur <code># Judul</code> / <code>## Subtitle</code> / <code>### Chapter N: Judul</code>.</td>
+        <td><code>outline.md</code></td>
+        <td>Kalau tidak ada satu pun heading <code>Chapter N:</code> yang bisa dibaca, pipeline <strong>berhenti</strong> dan menampilkan 5 baris pertama outline — bukan menulis bab berjudul “Chapter 1: Chapter 1”.</td>
+      </tr>
+      <tr>
+        <td><strong>2 · Bab</strong></td>
+        <td>Satu panggilan per bab. Model menerima outline + daftar bab yang sudah ditulis + <em>ekor bab sebelumnya</em> (untuk suara/kesinambungan), dan wajib mengembalikan badan bab saja.</td>
+        <td><code>chapter_01.md</code> …</td>
+        <td>Output dibersihkan dari “Sure! Here is the chapter…”, fence ``` penbungkus, heading duplikat, “Word count: 412”, dan sign-off — <em>kode blok asli di buku teknis tetap utuh</em>.</td>
+      </tr>
+      <tr>
+        <td><strong>3 · Appendices</strong></td>
+        <td>Preface, introduction, dedication, acknowledgments, epilogue, glossary, discussion guide, further reading.</td>
+        <td>File markdown per bagian</td>
+        <td>Hanya berjalan kalau <code>GEMINI_API_KEY</code> ada (skrip ini khusus Gemini). Bisa dilewati dengan <code>--skip-appendices</code>.</td>
+      </tr>
+      <tr>
+        <td><strong>4 · Referensi</strong></td>
+        <td>Merangkum sumber/bab menjadi bibliografi.</td>
+        <td><code>final_bibliography.md</code></td>
+        <td>Kalau dilewati, bagian “References” otomatis tidak dibuat — tidak lagi menggagalkan compile.</td>
+      </tr>
+      <tr>
+        <td><strong>5 · Orisinalitas</strong></td>
+        <td>Model memberi <code>ORIGINALITY: n/10</code> per bab; angkanya diparsing numerik.</td>
+        <td>Nilai: 8–10 lulus · 6–7 peringatan · &lt;6/ tak terbaca = ditandai</td>
+        <td>Ini <em>heuristik</em>, bukan database plagiarisme. Jangan jadikan bukti legal.</td>
+      </tr>
+      <tr>
+        <td><strong>6 · Compile</strong></td>
+        <td>Menggabungkan outline + bab → manuscript, menambah title page, TOC, copyright page, About the Author, lalu ekspor lewat pandoc.</td>
+        <td><code>exports_&lt;timestamp&gt;/</code>: EPUB, HTML, Markdown, print-ready HTML, book.css, metadata.yaml</td>
+        <td>PDF via LaTeX kalau <code>pdflatex</code>/<code>xelatex</code> terpasang; kalau tidak, dibuat <code>*_pdf_print.html</code> (Print → Save as PDF dari browser). MOBI/AZW3 butuh Calibre.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Isi folder hasil</h3>
+  <pre><span class="c">v3/20261012_130953_the_final_cut/</span>
+├── outline.md
+├── chapter_01.md            <span class="c"># sumber yang bisa Anda edit manual</span>
+├── chapter_02.md
+├── manuscript_original_….md <span class="c"># gabungan lengkap</span>
+└── exports_20261012_130954/
+    ├── manuscript_original_….epub   <span class="c"># upload ke KDP / Apple / Kobo</span>
+    ├── manuscript_original_….html
+    ├── manuscript_original_…_pdf_print.html
+    ├── book.css · metadata.yaml
+    └── book_metadata_stats.md        <span class="c"># jumlah kata per bab</span></pre>
+
+  <div class="note ok">
+    <p><strong>Kunci desainnya:</strong> semua langkah AI menulis file di antara langkah-langkahnya. Artinya Anda
+    bisa mengganti bab hasil AI dengan tulisan/editan Anda sendiri, dan tetap memakai mesin compile yang sama.
+    Anda juga bisa memakai langkah 6 saja — tanpa AI sama sekali — untuk merakit buku manual.</p>
+  </div>
+</section>
+
+<!-- ══════════════ 2. PROVIDER ══════════════ -->
+<section id="provider">
+  <h2><span class="n">02</span> Lapisan AI: provider apa saja, dan URL custom</h2>
+  <p>
+    Semua panggilan AI lewat satu pintu: <code>scripts/multi_provider_ai_simple.sh</code>.
+    Ia mendeteksi provider yang tersedia, mencoba berurutan, dan (kalau diminta) dikunci ke satu provider.
+  </p>
+
+  <div class="chain">
+    <span class="node g">Gemini</span><span class="arrow">→</span>
+    <span class="node b">Ollama lokal</span><span class="arrow">→</span>
+    <span class="node y">Groq</span><span class="arrow">→</span>
+    <span class="node p">Anthropic / Claude</span><span class="arrow">→</span>
+    <span class="node">Custom (OpenAI-compatible)</span>
+  </div>
+  <p>Urutan di atas berlaku untuk mode <code>auto</code>. Provider yang tidak dikonfigurasi dilewati, bukan digagalkan.</p>
+
+  <table>
+    <thead><tr><th>Provider</th><th>Variabel</th><th>Catatan</th></tr></thead>
+    <tbody>
+      <tr><td>Gemini</td><td><code>GEMINI_API_KEY</code></td><td>Disarankan; rotasi 7 model + cooldown saat kena rate limit. System prompt dikirim via <code>systemInstruction</code>.</td></tr>
+      <tr><td>Ollama (lokal)</td><td>tanpa key<br><code>http://localhost:11434</code></td><td>Gratis &amp; privat. Kalau server tak menjawab, terdeteksi dalam ±2 detik (dulu menggilir 7 model dengan pesan menyesatkan).</td></tr>
+      <tr><td>Groq</td><td><code>GROQ_API_KEY</code></td><td>Fallback cepat.</td></tr>
+      <tr><td>Anthropic / Claude</td><td><code>ANTHROPIC_API_KEY</code><br><code>ANTHROPIC_MODEL</code></td><td>Adapter sendiri, karena format API berbeda: system prompt sebagai field terpisah, auth <code>x-api-key</code> + <code>anthropic-version</code>.</td></tr>
+      <tr>
+        <td><strong>Custom</strong> (apa pun yang kompatibel OpenAI)</td>
+        <td><code>CUSTOM_API_BASE_URL</code><br><code>CUSTOM_API_KEY</code><br><code>CUSTOM_MODEL</code></td>
+        <td>OpenAI, OpenRouter, DeepSeek, Together, Mistral, xAI, LM Studio, vLLM, llama.cpp, gateway internal.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Empat cara menulis URL, semuanya sah</h3>
+  <pre><span class="k">export</span> CUSTOM_API_BASE_URL=<span class="s">"http://localhost:1234/v1"</span>                 <span class="c"># → /v1/chat/completions</span>
+<span class="k">export</span> CUSTOM_API_BASE_URL=<span class="s">"http://localhost:1234/v1/"</span>                <span class="c"># slash akhir dinormalisasi</span>
+<span class="k">export</span> CUSTOM_API_BASE_URL=<span class="s">"http://localhost:1234/v1/chat/completions"</span> <span class="c"># tidak jadi dobel</span>
+<span class="k">export</span> CUSTOM_API_BASE_URL=<span class="s">"https://gw.internal/proxy/llm/v1"</span>       <span class="c"># prefix gateway tetap jalan</span>
+
+./scripts/generate_book.sh --topic <span class="s">"Topik Anda"</span> --provider custom</pre>
+
+  <div class="note">
+    <p><strong>Pilih provider:</strong> <code>--provider auto|gemini|ollama|groq|anthropic|openai|custom</code>.
+    Kunci bersifat tegas: kalau provider yang dikunci tidak punya key/URL, jalannya berhenti dengan pesan
+    variabel mana yang harus diisi — tidak diam-diam pindah ke provider lain.</p>
+    <p>Cek koneksi kapan saja: <code>./scripts/multi_provider_ai_simple.sh status</code> dan <code>… test</code>.</p>
+  </div>
+</section>
+
+<!-- ══════════════ 3. GERBANG ══════════════ -->
+<section id="gerbang">
+  <h2><span class="n">03</span> Gerbang kualitas: kapan pipeline berhenti</h2>
+  <p>Sebelum perbaikan, kegagalan sering <em>tak terlihat</em> (teks kosong dianggap sukses, bab berisi placeholder,
+    build gagal tanpa penjelasan). Sekarang kondisi-kondisi ini menggagalkan run secara eksplisit:</p>
+  <ul class="clean check">
+    <li>Outline tidak punya heading <code>Chapter N:</code> yang bisa dibaca → berhenti + cuplikan outline.</li>
+    <li>Semua bab gagal dibuat → berhenti; sebagian gagal → dihitung dan dilaporkan.</li>
+    <li>Provider mengembalikan badan kosong / hanya spasi / error JSON → dihitung gagal, bukan “✓ Generated”.</li>
+    <li>Tidak ada provider sama sekali → berhenti dalam ±4 detik dengan daftar provider yang dicek (dulu ±21 detik).</li>
+    <li>Compile tanpa bibliografi → bagian References dilewati, build lanjut.</li>
+    <li>Aset gambar tidak diberikan → tidak ada satu pun gambar disisipkan (dulu logo penerbit orang lain ikut masuk).</li>
+  </ul>
+  <div class="note warn">
+    <p><strong>Artwork bersifat opt-in.</strong> Setiap compile menampilkan ringkasan seperti
+    <code>icon: (none) / logo: logo-saya.png / author photo: (none) / back cover: (none)</code>,
+    jadi Anda selalu tahu apa yang akan tercetak di buku — tidak ada kejutan.</p>
+  </div>
+</section>
+
+<!-- ══════════════ 4. AMAN? ══════════════ -->
+<section id="aman">
+  <h2><span class="n">04</span> Aman dipakai langsung? Ini jawaban jujurnya</h2>
+
+  <h3>Yang sudah beres (hasil audit)</h3>
+  <table>
+    <thead><tr><th>Temuan</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>Orkestrator mengirim versi <code>1.0</code> ke compile yang hanya terima <code>1|2|3</code> → langkah terakhir <em>selalu</em> gagal</td><td class="st ok">DIPERBAIKI</td></tr>
+      <tr><td><code>cat</code> file bibliografi yang tidak ada → build abort di tengah</td><td class="st ok">DIPERBAIKI</td></tr>
+      <tr><td>Cari <code>chapter_1.md</code> padahal generator menulis <code>chapter_01.md</code></td><td class="st ok">DIPERBAIKI</td></tr>
+      <tr><td>Bio “About the Author” hardcoded + nama penulis acak asing (“Elara Morgan”)</td><td class="st ok">DIPERBAIKI</td></tr>
+      <tr><td><strong>Aset bawaan repo ikut masuk ke buku Anda</strong>: logo penerbit lain, ikon, foto penulis lain, sampul belakang buku lain</td><td class="st ok">DIPERBAIKI (opt-in)</td></tr>
+      <tr><td>System prompt dibuang untuk Gemini (instruksi format hilang)</td><td class="st ok">DIPERBAIKI</td></tr>
+      <tr><td>Chat wrapper/fence masuk ke manuscript → bab dirender jadi blok kode <code>&lt;pre&gt;</code> di EPUB</td><td class="st ok">DIPERBAIKI</td></tr>
+      <tr><td>Skor orisinalitas salah baca (3/10 dianggap original)</td><td class="st ok">DIPERBAIKI</td></tr>
+      <tr><td>Respons kosong dianggap sukses · rewrite gagal bisa menimpa bab jadi kosong</td><td class="st ok">DIPERBAIKI</td></tr>
+      <tr><td><code>--provider</code> tidak berpengaruh · Ollama mengabaikan budget token</td><td class="st ok">DIPERBAIKI</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Yang masih wajib Anda siapkan / perhatikan</h3>
+  <table>
+    <thead><tr><th>Hal</th><th>Status</th><th>Penjelasan</th></tr></thead>
+    <tbody>
+      <tr><td>API key AI</td><td class="st warn">WAJIB</td><td>Tanpa salah satu key, langkah outline langsung berhenti. Gemini punya tier gratis yang cukup untuk satu buku.</td></tr>
+      <tr><td>Cover sendiri</td><td class="st warn">WAJIB</td><td>Cover bawaan repo adalah cover buku-buku yang sudah terbit. KDP minta minimal ~1600×2560 px; generate via <code>--generate-cover</code> (kasar) atau desain sendiri.</td></tr>
+      <tr><td>Bio &amp; foto penulis, logo penerbit</td><td class="st warn">OPSIONAL</td><td>Letakkan <code>author_bio.md</code> di folder buku; foto/logo lewat <code>--author-photo</code> / <code>--logo</code>.</td></tr>
+      <tr><td>LaTeX</td><td class="st warn">OPSIONAL</td><td>Hanya untuk PDF asli; tanpa itu Anda dapat print-ready HTML.</td></tr>
+      <tr><td>Calibre</td><td class="st warn">OPSIONAL</td><td>Hanya untuk MOBI/AZW3.</td></tr>
+      <tr><td><strong>Lisensi repo</strong></td><td class="st bad">BELUM ADA</td><td>Repo tidak punya file <code>LICENSE</code>. Secara hukum default = “all rights reserved”, jadi mendistribusikan ulang kode ini abu-abu. <em>Buku yang Anda hasilkan</em> tidak terpengaruh — itu milik Anda (lihat catatan di bawah).</td></tr>
+      <tr><td><strong>Pemeriksaan plagiarisme sungguhan</strong></td><td class="st bad">TIDAK ADA</td><td>Langkah 5 hanyalah pendapat model, bukan pembandingan teks dengan database/Internet. Untuk buku komersial, verifikasi manual tetap perlu.</td></tr>
+      <tr><td><strong>Skrip riset pasar</strong></td><td class="st warn">HATI-HATI</td><td><code>kdp_market_analyzer.sh</code> / <code>topic_market_research.sh</code> melakukan scraping Amazon — berpotensi melanggar ToS mereka dan bisa diblokir.</td></tr>
+      <tr><td>Kewajiban platform AI</td><td class="st warn">PENTING</td><td>Amazon KDP mewajibkan Anda mengungkapkan konten yang dihasilkan AI saat publikasi, dan membatasi jumlah judul baru per hari. Cek aturan terbaru sebelum upload.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note bad">
+    <p><strong>Kesimpulan “aman dipakai langsung”:</strong> untuk <em>mencoba</em> dan membangun draft — ya, sekarang jalan
+    (sebelum perbaikan, langkah compile-nya praktis selalu gagal dan aset orang lain ikut masuk buku).
+    Untuk <em>menerbitkan</em> — belum bisa “langsung”; wajib ada review manusia, cover sendiri, dan pemahaman
+    aturan AI di platform. Anggarkan setidaknya satu putaran editing menyeluruh sebelum upload.</p>
+  </div>
+</section>
+
+<!-- ══════════════ 5. PRO? ══════════════ -->
+<section id="pro">
+  <h2><span class="n">05</span> Bisa menghasilkan buku “sekelas profesional”?</h2>
+  <p>Mari dipisahkan antara <strong>mesin</strong> dan <strong>isi</strong>, karena jawabannya berbeda:</p>
+
+  <div class="grid two">
+    <div class="card">
+      <h4>Mesin (tooling) — ✅ sudah level produksi</h4>
+      <p>Alur bab → manuscript → EPUB/HTML dengan title page, TOC, copyright page, metadata, daftar isi koheren, dan
+      verifikasi bahwa EPUB-nya benar-benar valid (saya uji baca ulang isinya). Untuk buku non-fiksi praktis,
+      hasil formatnya sudah layak upload KDP.</p>
+    </div>
+    <div class="card">
+      <h4>Isi (prosa) — tergantung model + editing Anda</h4>
+      <p>Draft AI tanpa editan cenderung <em>generik</em>: paragraf seragam, sedikit contoh konkret, kadang mengulang.
+      Dua buku yang sudah terbit dari toolkit ini memang lewat review dan penyelesaian manual — README-nya sendiri
+      menyebut “manual review and cover design recommended”.</p>
+    </div>
+  </div>
+
+  <h3>Rapor per aspek</h3>
+  <table>
+    <thead><tr><th>Aspek</th><th>Nilai</th><th>Alasan</th></tr></thead>
+    <tbody>
+      <tr><td>Struktur &amp; format ekspor</td><td class="st ok">Baik</td><td>EPUB/HTML/MD tervalidasi; PDF butuh LaTeX (tanpa itu ada print-ready HTML).</td></tr>
+      <tr><td>Metadata &amp; halaman wajib</td><td class="st ok">Baik</td><td>Judul, subjudul, penulis, penerbit, tahun, ISBN (opsional), copyright.</td></tr>
+      <tr><td>Cover &amp; artwork</td><td class="st warn">Perlu tenaga Anda</td><td>Opt-in sekarang, tapi kualitas cover tetap tanggung jawab Anda — ini faktor konversi penjualan nomor satu.</td></tr>
+      <tr><td>Kualitas prosa tingkat pertama</td><td class="st warn">Perlu editan</td><td>Perlu satu-dua putaran revisi; mesin bantu <code>optimized_chapter_handler.sh</code> ada, tapi tak ada jaminan gaya.</td></tr>
+      <tr><td>Riset &amp; fakta</td><td class="st bad">Lemah</td><td>Tidak ada fact-checking, tidak ada akses web saat menulis; bibliografi bersumber dari model.</td></tr>
+      <tr><td>Kepatuhan platform</td><td class="st warn">Tanggung jawab Anda</td><td>Pengungkapan konten AI, batas jumlah judul, dan hak cipta ada di sisi Anda.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note warn">
+    <p><strong>Jalan realistis menuju “profesional”:</strong> pakai repo ini sebagai pabrik <em>draft</em> + perakit,
+    lalu investasikan waktu Anda di 4 hal ini — (1) editing menyeluruh, (2) tambah contoh/cerita/fakta nyata,
+    (3) cover yang didesain sungguhan, (4) verifikasi sumber dan pengungkapan AI. Itu yang membedakan buku AI
+    yang “lolos” dari yang “laku”.</p>
+  </div>
+</section>
+
+<!-- ══════════════ 6. AGENT ══════════════ -->
+<section id="agent">
+  <h2><span class="n">06</span> “AI enhancer” / mode agent — bisa, dan justru langkah berikutnya</h2>
+  <p>
+    <strong>Status sekarang:</strong> ini <em>bukan</em> agent, ini <em>pipeline batch deterministik</em>.
+    Ia tidak merencanakan, tidak memutuskan, tidak memakai alat lain, tidak mengoreksi dirinya sendiri, dan tidak
+    ingat apa pun antar-bab selain ekor bab sebelumnya. Perilakunya: “panggil API → tulis file → lanjut”.
+  </p>
+
+  <h3>Yang berubah kalau ada lapisan agent</h3>
+  <div class="agentmap">
+    <div class="lane">
+      <div class="lbl">SEKARANG — batch</div>
+      <div class="row">
+        <span class="node">outline</span><span class="arrow">→</span>
+        <span class="node">bab 1..N</span><span class="arrow">→</span>
+        <span class="node">cek skor</span><span class="arrow">→</span>
+        <span class="node">compile</span>
+      </div>
+    </div>
+    <div class="lane">
+      <div class="lbl">DENGAN AGENT — loop plan → act → critique → revise</div>
+      <div class="row">
+        <span class="node g">Planner</span><span class="arrow">→</span>
+        <span class="node b">Writer</span><span class="arrow">→</span>
+        <span class="node y">Critic (rubrik)</span><span class="arrow">→</span>
+        <span class="node p">Reviser</span><span class="arrow">↻</span>
+        <span class="node">Compile &amp; verifikasi</span>
+      </div>
+    </div>
+    <div class="lane">
+      <div class="lbl">TOOLS yang bisa dipakai agent</div>
+      <div class="row">
+        <span class="node">web search / riset fakta</span>
+        <span class="node">market data (KDP)</span>
+        <span class="node">generate_image (cover)</span>
+        <span class="node">compiler buku ini</span>
+        <span class="node">grammar check</span>
+        <span class="node">document/notes Anda</span>
+      </div>
+    </div>
+  </div>
+
+  <h3>Kombinasi dengan agent lain — tiga pola yang praktis</h3>
+  <div class="grid three">
+    <div class="card">
+      <h4>1. Repo sebagai <em>tool</em> untuk agent Anda</h4>
+      <p class="tag">paling cepat</p>
+      <p>Bungkus skrip yang ada sebagai perintah yang bisa dipanggil agent: <code>generate_outline</code>,
+      <code>write_chapter</code>, <code>critique_chapter</code>, <code>compile_book</code>. Agent
+      (Claude Code / Cursor / ChatGPT / LangGraph / n8n) yang memegang keputusan, repo ini yang mengeksekusi.</p>
+    </div>
+    <div class="card">
+      <h4>2. MCP server</h4>
+      <p class="tag">paling rapi</p>
+      <p>Ekspos kemampuan repo sebagai MCP tools, sehingga agent apa pun yang mendukung MCP bisa
+      “menulis buku” dengan memanggil tool tersebut — sekaligus menggabungkannya dengan Notion/Drive/Sheets
+      sebagai sumber riset dan penyimpanan naskah.</p>
+    </div>
+    <div class="card">
+      <h4>3. Agent di dalam repo</h4>
+      <p class="tag">paling mandiri</p>
+      <p>Tambah <code>scripts/agent_book.sh</code>: planner menyusun rencana bab → writer menulis → critic menilai
+      dengan rubrik (kejelasan, contoh konkret, kesesuaian audiens) → reviser memperbaiki bab yang di bawah ambang,
+      maksimum N putaran, lalu compile. Itu mengubah “generate sekali jadi” menjadi “tulis, nilai, perbaiki”.</p>
+    </div>
+  </div>
+
+  <h3>Yang paling terasa bedanya</h3>
+  <ul class="clean">
+    <li><strong>Riset fakta</strong> — agent bisa mencari dan memverifikasi sebelum menulis; ini kelemahan terbesar pipeline sekarang.</li>
+    <li><strong>Konsistensi panjang</strong> — ringkasan/“bible” buku disimpan dan dipakai ulang, bukan cuma ekor bab sebelumnya.</li>
+    <li><strong>Penilaian berulang</strong> — bab yang lemah diperbaiki otomatis, bukan diterbitkan apa adanya.</li>
+    <li><strong>Benchmark pasar</strong> — agent bisa mengambil data niche, membandingkan kompetitor, lalu menyetel outline.</li>
+    <li><strong>Multimodal</strong> — cover, diagram, dan tabel dibuat sebagai bagian dari alur, bukan tambalan belakangan.</li>
+  </ul>
+
+  <div class="note ok">
+    <p><strong>Rekomendasi saya (jika Anda mau saya kerjakan):</strong> mulai dari pola 1 + 3.
+    Pola 1 memberi hasil tercepat (agent Anda langsung bisa memakai repo ini), pola 3 memberi lompatan kualitas isi
+    karena ada loop critic → revise. MCP (pola 2) menyusul begitu kedua itu stabil.</p>
+  </div>
+</section>
+
+<!-- ══════════════ 7. MULAI ══════════════ -->
+<section id="mulai">
+  <h2><span class="n">07</span> Mulai cepat (urutan yang saya sarankan)</h2>
+  <pre><span class="c"># 0. Prasyarat &amp; key</span>
+brew install pandoc imagemagick jq        <span class="c"># + texlive untuk PDF, calibre untuk MOBI</span>
+<span class="k">export</span> GEMINI_API_KEY=<span class="s">"..."</span>                <span class="c"># atau ANTHROPIC_API_KEY / CUSTOM_API_* / Ollama lokal</span>
+./scripts/multi_provider_ai_simple.sh status   <span class="c"># pastikan provider terbaca</span>
+
+<span class="c"># 1. Coba dulu dengan buku kecil (1 bab, 800 kata)</span>
+./scripts/generate_book.sh --topic <span class="s">"Topik uji"</span> --chapters 1 --words-per-chapter 800 \
+  --pen-name <span class="s">"Nama Anda"</span> --skip-appendices --skip-references
+
+<span class="c"># 2. Baca hasilnya, putuskan lanjut</span>
+<span class="c">#    (outline.md, chapter_01.md, exports_*/…epub)</span>
+
+<span class="c"># 3. Buku sungguhan</span>
+./scripts/generate_book.sh --topic <span class="s">"Topik Anda"</span> --chapters 12 --words-per-chapter 2500 \
+  --pen-name <span class="s">"Nama Anda"</span> --provider gemini
+
+<span class="c"># 4. Rapikan untuk terbit</span>
+<span class="c">#    - tulis author_bio.md di folder buku</span>
+<span class="c">#    - siapkan cover 1600×2560</span>
+./scripts/compile_book.sh v3/&lt;folder-buku&gt; all 1 --author <span class="s">"Nama Anda"</span> \
+  --cover cover.png --author-photo foto.png --isbn <span class="s">"978-…"</span></pre>
+
+  <div class="note warn">
+    <p><strong>Catatan lingkungan:</strong> skrip tidak memuat file <code>.env</code> sendiri — Anda perlu
+    <code>set -a; source .env; set +a</code> (atau <code>export</code> manual) sebelum menjalankannya.
+    Kalau mau, saya bisa tambahkan pemuatan <code>.env</code> otomatis.</p>
+  </div>
+</section>
+
+<footer>
+  <p>Dokumen ini merangkum keadaan repo pada commit <code>a9f128a</code> (branch <code>arena/1b3521bd-book-generator</code>):
+  4 putaran perbaikan — compile stage, lapisan AI, provider custom, dan aset artwork — dengan 26 tes otomatis lulus.</p>
+  <p>Semua angka di halaman ini berasal dari eksekusi nyata di sandbox: stub provider offline, verifikasi isi EPUB,
+  dan pemeriksaan payload yang benar-benar dikirim ke endpoint.</p>
+</footer>
+
+</div>
+</body>
+</html>
