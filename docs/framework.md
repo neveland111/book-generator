@@ -1,11 +1,11 @@
 # Framework Book Generator — Jabaran Lengkap
 
-> Keadaan repo pada rilis **v1.6.0**, branch `arena/1b3521bd-book-generator`.
-> Semua angka di dokumen ini diverifikasi langsung dari isi repo (jumlah baris, nama fungsi, dan 47 tes otomatis).
+> Keadaan repo pada rilis **v1.7.0**, branch `arena/1b3521bd-book-generator`.
+> Semua angka di dokumen ini diverifikasi langsung dari isi repo (jumlah baris, nama fungsi, dan 65 tes otomatis).
 
 ---
 
-## 1. Gambaran besar: 8 lapisan
+## 1. Gambaran besar: 9 lapisan
 
 ```
                     ┌──────────────────────────────────────────┐
@@ -21,7 +21,7 @@
                             │                       │
               ┌─────────────▼──────────┐  ┌─────────▼─────────────┐
    PIPE       │ generate_book.sh       │  │ agent_book.sh         │
-   (2 pilihan)│ 6 langkah, batch       │  │ 4 langkah + loop      │
+   (2 pilihan)│ 7 langkah, batch       │  │ 5 langkah + loop      │
               │ deterministik          │  │ kritik → revisi       │
               └─────────────┬──────────┘  └─────────┬─────────────┘
                             └───────────┬───────────┘
@@ -41,12 +41,17 @@
                     └───────────────────┬──────────────────────┘
                                         │
                     ┌───────────────────▼──────────────────────┐
-   UJI & DOKUMEN    │ 47 tes bats + stub provider offline      │  bukti, bukan klaim
+   PUBLISHING       │ generate_marketing_copy.sh               │  deskripsi KDP,
+   (baru, v1.7.0)   │ 4.000 char · 7 keyword · 3 kategori      │  keyword, kategori
+                    └───────────────────┬──────────────────────┘
+                                        │
+                    ┌───────────────────▼──────────────────────┐
+   UJI & DOKUMEN    │ 65 tes bats + stub provider offline      │  bukti, bukan klaim
                     │ README · CHANGELOG · cara-kerja.html     │
                     └──────────────────────────────────────────┘
 ```
 
-Total: **16 skrip shell**, 11.647 baris, **47 tes otomatis**, 4 berkas dokumentasi.
+Total: **17 skrip shell**, 12.647 baris, **65 tes otomatis**, 4 berkas dokumentasi.
 
 ---
 
@@ -91,18 +96,19 @@ OpenRouter, DeepSeek, Together, Mistral, xAI, Fireworks, LM Studio, vLLM, atau s
 
 ## 3. Jalur A: Batch — `scripts/generate_book.sh` (373 baris)
 
-Pipeline lurus 6 langkah, deterministik, tanpa pengambilan keputusan.
+Pipeline lurus 7 langkah, deterministik, tanpa pengambilan keputusan.
 
 | Langkah | Yang dilakukan | Skrip yang dipanggil |
 |---|---|---|
-| `[1/6]` | Bikin outline (jumlah bab & kata sesuai permintaan) | `generate_outline_with_smart_api` |
-| `[2/6]` | Tulis tiap bab, satu per satu | `generate_chapter_with_smart_api` |
-| `[3/6]` | Lampiran | `generate_appendices.sh` |
-| `[4/6]` | Bibliografi / daftar pustaka | `generate_references.sh` |
-| `[5/6]` | Cek orisinalitas tiap bab | `check_plagiarism_with_smart_api` |
-| `[6/6]` | Kompilasi jadi buku | `compile_book.sh` |
+| `[1/7]` | Bikin outline (jumlah bab & kata sesuai permintaan) | `generate_outline_with_smart_api` |
+| `[2/7]` | Tulis tiap bab, satu per satu | `generate_chapter_with_smart_api` |
+| `[3/7]` | Lampiran | `generate_appendices.sh` |
+| `[4/7]` | Bibliografi / daftar pustaka | `generate_references.sh` |
+| `[5/7]` | Cek orisinalitas tiap bab | `check_plagiarism_with_smart_api` |
+| `[6/7]` | Kompilasi jadi buku | `compile_book.sh` |
+| `[7/7]` | Paket pemasaran KDP (opsional, `--marketing`) | `generate_marketing_copy.sh` |
 
-**Opsi CLI:** `--topic --genre --chapters --words-per-chapter --output-dir --pen-name --provider --style --tone --audience --skip-appendices --skip-references --skip-compile --quiet --images --illustrate --generate-cover --image-provider`
+**Opsi CLI:** `--topic --genre --chapters --words-per-chapter --output-dir --pen-name --provider --style --tone --audience --skip-appendices --skip-references --skip-compile --quiet --images --illustrate --generate-cover --image-provider --marketing`
 
 Setiap langkah bisa di-`--skip`, jadi bisa dipakai untuk menulis bab saja lalu dikompilasi manual.
 
@@ -114,10 +120,11 @@ Bukan sekadar batch: ada **loop penilaian diri**. Ini yang dimaksud "AI enhancer
 
 | Langkah | Yang dilakukan |
 |---|---|
-| `[1/4]` | **Planing** — susun outline |
-| `[2/4]` | **Tulis → nilai → perbaiki** per bab |
-| `[3/4]` | **Cek orisinalitas** |
-| `[4/4]` | **Kompilasi** |
+| `[1/5]` | **Planing** — susun outline |
+| `[2/5]` | **Tulis → nilai → perbaiki** per bab |
+| `[3/5]` | **Cek orisinalitas** |
+| `[4/5]` | **Kompilasi** |
+| `[5/5]` | **Paket pemasaran KDP** (opsional, `--marketing`) |
 
 Loop di langkah 2 inilah bedanya:
 
@@ -156,7 +163,27 @@ Baru di v1.6.0. Rantai provider, dicoba berurutan, pakai yang pertama berhasil:
 
 ---
 
-## 6. Lapisan kompilasi — `scripts/compile_book.sh` (2.267 baris, terbesar)
+## 6. Lapisan publishing — `scripts/generate_marketing_copy.sh` (966 baris, v1.7.0)
+
+Lubang terakhir antara "buku selesai" dan "buku terbit". Membaca folder buku, lalu menulis
+`<buku>/marketing/`: deskripsi siap tempel, 7 keyword, 3 kategori, copy sosial, dan satu lembar
+`kdp_listing.md` berisi semuanya plus laporan validasi.
+
+Aturan KDP ditegakkan di kode, bukan sekadar disarankan di prompt:
+
+| Aturan KDP | Cara ditegakkan |
+|---|---|
+| Deskripsi maks 4.000 karakter **termasuk tag HTML** | Dihitung dengan `mc_file_len`; kelebihan dipotong di batas kalimat, tidak pernah dibiarkan lewat |
+| Hanya tag HTML tertentu yang diterima | `mc_clean_description_html`: tag asing dibuka (teks tetap), atribut dibuang |
+| Emoji Unicode ditolak | `mc_strip_emoji` (python3 → perl → peringatan keras) |
+| 7 kolom keyword × 50 karakter | Dipotong di batas kata, duplikat dibuang **tanpa mengacak urutan prioritas** |
+| Maks 3 kategori | Divalidasi jumlah dan keberadaan jalur `>` |
+| Anti keyword stuffing | Memperingatkan keyword yang diulang 3× di deskripsi, kata yang muncul di dua kolom, frasa yang mengulang judul |
+
+`--check` memvalidasi folder yang sudah ada **tanpa AI dan tanpa jaringan** (bisa masuk CI), dan keluar
+dengan status ≠0 kalau ada yang akan ditolak KDP.
+
+## 7. Lapisan kompilasi — `scripts/compile_book.sh` (2.267 baris, terbesar)
 
 Dari markdown jadi buku jadi. Ini yang mengurus semua detail produksi.
 
@@ -179,7 +206,7 @@ Dari markdown jadi buku jadi. Ini yang mengurus semua detail produksi.
 
 ---
 
-## 7. Lapisan riset pasar & KDP
+## 8. Lapisan riset pasar & KDP
 
 Modul untuk memutuskan **buku apa yang layak ditulis** — sebelum satu kata pun ditulis AI.
 
@@ -193,7 +220,7 @@ Modul untuk memutuskan **buku apa yang layak ditulis** — sebelum satu kata pun
 
 ---
 
-## 8. Lapisan mutu: gerbang yang menghentikan pipeline
+## 9. Lapisan mutu: gerbang yang menghentikan pipeline
 
 Tiga gerbang berbeda, di tiga titik:
 
@@ -205,29 +232,30 @@ Ditambah **quality assessment** di akhir kompilasi (panjang buku & bab).
 
 ---
 
-## 9. Lapisan uji & dokumentasi
+## 10. Lapisan uji & dokumentasi
 
-**47 tes otomatis, 0 gagal** (terakhir dijalankan di sandbox):
+**65 tes otomatis, 0 gagal** (terakhir dijalankan di sandbox):
 
 | Berkas | Jumlah | Fokus |
 |---|---|---|
 | `tests/ai_layer.bats` | 18 | Lapisan AI: format request tiap provider, fallback, parsing skor, `.env`, pembersihan respons |
 | `tests/generator.bats` | 15 | Pipeline & kompilasi: EPUB terbentuk, artwork tidak bocor, sampul yang diberikan benar-benar masuk EPUB |
 | `tests/image_gen.bats` | 14 | Lapisan gambar: ketiga protokol provider, penolakan HTML, rantai jatuh ke provider hidup, komposisi sampul |
+| `tests/marketing_copy.bats` | 18 | Paket pemasaran: pembersihan HTML/emoji, ketiga validator KDP, `--check` offline, batas panjang, kegagalan provider |
 | `tests/fixtures/image_stub_server.py` | — | Server stub lokal: meniru Pollinations + A1111 + OpenAI-compatible sekaligus, jadi seluruh rantai gambar bisa diuji **tanpa internet dan tanpa API key** |
 
 **Dokumentasi:** `README.md` (28 KB) · `CHANGELOG.md` (24 KB, terlacak dari v0.1.0 → v1.6.0) · `docs/cara-kerja.html` (36 KB, bahasa Indonesia) · `docs/framework.md` (dokumen ini) · `.env.example`
 
 ---
 
-## 10. Yang BELUM ada — celah yang jujur
+## 11. Yang BELUM ada — celah yang jujur
 
 Supaya Anda tahu batasnya, bukan cuma isinya:
 
 | Celah | Keterangan |
 |---|---|
 | **Belum ada unggah otomatis ke KDP** | Amazon tidak menyediakan API publik untuk ini. Selalu langkah manual di akhir. |
-| **Belum ada generator copy marketing** | Deskripsi buku, blurb, 7 keyword KDP, kategori BISAC — belum ada skripnya, padahal ini wajib saat unggah. Yang ada baru riset keyword. |
+| ~~Belum ada generator copy marketing~~ | **Sudah ada sejak v1.7.0**: `generate_marketing_copy.sh` menghasilkan deskripsi, 7 keyword, 3 kategori, copy sosial, plus `--check` offline. |
 | **"Plagiarism check" = penilaian AI** | Bukan pencocokan ke basis data Turnitin/iThenticate. Ia menilai orisinalitas gaya, bukan mendeteksi kemiripan teks dengan korpus global. |
 | **Riset pasar bergantung pada sumber luar** | Google Trends RSS & Reddit — rapuh kalau situsnya berubah, dan rentan diblokir. |
 | **`generate_covers.sh` sudah usang** | Ia mengotomasi UI ChatGPT/Gemini lewat Playwright — rapuh dan melanggar ToS. Sekarang sudah ada pengganti yang lebih baik: `image_gen.sh`. |
@@ -240,7 +268,7 @@ Supaya Anda tahu batasnya, bukan cuma isinya:
 
 ---
 
-## 11. Peta berkas
+## 12. Peta berkas
 
 ```
 book-generator/
@@ -249,6 +277,7 @@ book-generator/
 │   ├── agent_book.sh                 ← jalur agent (4 langkah + loop kritik)
 │   ├── compile_book.sh               ← kompilasi 7 format, 2.267 baris
 │   ├── image_gen.sh                  ← gambar gratis dulu (v1.6.0)
+│   ├── generate_marketing_copy.sh    ← paket pemasaran KDP (v1.7.0)
 │   ├── multi_provider_ai_simple.sh   ← inti AI: 6 provider, fallback, .env
 │   ├── multi_provider_ai.sh          ← versi lama (rate-limit berbasis file)
 │   ├── generate_appendices.sh        ← lampiran
@@ -265,6 +294,7 @@ book-generator/
 │   ├── ai_layer.bats (18)
 │   ├── generator.bats (15)
 │   ├── image_gen.bats (14)
+│   ├── marketing_copy.bats (18)
 │   └── fixtures/image_stub_server.py
 ├── docs/cara-kerja.html              ← walkthrough (Indonesia)
 ├── docs/framework.md                 ← dokumen ini
@@ -273,7 +303,7 @@ book-generator/
 
 ---
 
-## 12. Jalur tercepat mencoba semuanya
+## 13. Jalur tercepat mencoba semuanya
 
 ```bash
 # 1. Cek provider yang siap
@@ -288,7 +318,11 @@ book-generator/
 ./scripts/agent_book.sh --topic "Topik Anda" --chapters 12 --words-per-chapter 2500 \
   --pen-name "Nama Anda" --threshold 8 --max-revisions 1
 
-# 4. Rapikan untuk terbit
+# 4. Paket pemasaran KDP (deskripsi, 7 keyword, 3 kategori) — atau --marketing di langkah 3
+./scripts/generate_marketing_copy.sh v3/<folder-buku>
+./scripts/generate_marketing_copy.sh v3/<folder-buku> --check   # validasi offline
+
+# 5. Rapikan untuk terbit
 ./scripts/compile_book.sh v3/<folder-buku> all 1 --author "Nama Anda" \
   --generate-cover --illustrate --isbn "978-..."
 ```

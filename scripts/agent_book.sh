@@ -26,6 +26,7 @@ TARGET_AUDIENCE="general audience"
 THRESHOLD=8          # a chapter scoring below this gets revised
 MAX_REVISIONS=1      # revision rounds per chapter
 SKIP_COMPILE=false
+MARKETING=false
 SKIP_ORIGINALITY=false
 QUIET=false
 
@@ -55,6 +56,8 @@ Options:
   --max-revisions N       Revision rounds per chapter (default: 1, 0 disables)
   --skip-originality      Skip the originality check step
   --skip-compile          Stop before the final EPUB/PDF compilation
+  --marketing             Also build the KDP marketing pack (description, 7 keywords,
+                          categories, social copy) — one extra AI call per artifact
   --quiet                 Suppress progress output (errors still shown)
   --help                  Show this message and exit
 
@@ -87,6 +90,7 @@ while [[ $# -gt 0 ]]; do
         --max-revisions)     MAX_REVISIONS="$2";      shift 2 ;;
         --skip-originality)  SKIP_ORIGINALITY=true;   shift ;;
         --skip-compile)      SKIP_COMPILE=true;       shift ;;
+        --marketing)        MARKETING=true;           shift ;;
         --quiet)             QUIET=true;              shift ;;
         --help|-h)           usage; exit 0 ;;
         *)                   die "Unknown option: $1  (run --help for usage)" ;;
@@ -163,8 +167,8 @@ START_EPOCH=$(date +%s)
     echo "|---|---|---|---|---|---|"
 } > "$REPORT_FILE"
 
-# ── [1/4] Plan (outline) ─────────────────────────────────────────────────────
-log "🧭 [1/4] Planning the book (outline)..."
+# ── [1/5] Plan (outline) ─────────────────────────────────────────────────────
+log "🧭 [1/5] Planning the book (outline)..."
 OUTLINE_FILE="$BOOK_DIR/outline.md"
 
 OUTLINE_CONTENT=$(generate_outline_with_smart_api \
@@ -184,8 +188,8 @@ fi
 ACTUAL_CHAPTERS=${#CHAPTER_LINES[@]}
 log "        Outline saved (outline.md) — $ACTUAL_CHAPTERS chapters planned"
 
-# ── [2/4] Write, critique and revise each chapter ────────────────────────────
-log "✍️  [2/4] Writing, then grading each chapter..."
+# ── [2/5] Write, critique and revise each chapter ────────────────────────────
+log "✍️  [2/5] Writing, then grading each chapter..."
 EXISTING_CHAPTERS=""
 LAST_TAIL=""
 WRITTEN=0
@@ -300,9 +304,9 @@ if [ "$WRITTEN" -eq 0 ]; then
 fi
 log "        ✓ $WRITTEN/$ACTUAL_CHAPTERS chapters written, $REVISED_TOTAL revision round(s) applied"
 
-# ── [3/4] Originality check ──────────────────────────────────────────────────
+# ── [3/5] Originality check ──────────────────────────────────────────────────
 if [ "$SKIP_ORIGINALITY" = false ]; then
-    log "🔍 [3/4] Originality check..."
+    log "🔍 [3/5] Originality check..."
     flagged=0
     for chapter_file in "$BOOK_DIR"/chapter_*.md; do
         [[ -f "$chapter_file" ]] || continue
@@ -320,12 +324,12 @@ if [ "$SKIP_ORIGINALITY" = false ]; then
     echo "" >> "$REPORT_FILE"
     echo "**Originality:** $flagged chapter(s) flagged for review." >> "$REPORT_FILE"
 else
-    log "⏭️  [3/4] Originality check skipped"
+    log "⏭️  [3/5] Originality check skipped"
 fi
 
-# ── [4/4] Compile ────────────────────────────────────────────────────────────
+# ── [4/5] Compile ────────────────────────────────────────────────────────────
 if [ "$SKIP_COMPILE" = false ]; then
-    log "📦 [4/4] Compiling the book..."
+    log "📦 [4/5] Compiling the book..."
     COMPILE_OPTS=()
     [[ -n "$PEN_NAME" ]] && COMPILE_OPTS+=(--author "$PEN_NAME")
     if bash "$SCRIPT_DIR/compile_book.sh" "$BOOK_DIR" all 1 ${COMPILE_OPTS[@]+"${COMPILE_OPTS[@]}"}; then
@@ -336,8 +340,20 @@ if [ "$SKIP_COMPILE" = false ]; then
         COMPILED="failed"
     fi
 else
-    log "⏭️  [4/4] Compilation skipped"
+    log "⏭️  [4/5] Compilation skipped"
     COMPILED="skipped"
+fi
+
+# ── [5/5] Marketing pack (opt-in) ────────────────────────────────────────────
+if [ "$MARKETING" = true ]; then
+    log "📣 [5/5] Building the KDP marketing pack..."
+    if bash "$SCRIPT_DIR/generate_marketing_copy.sh" "$BOOK_DIR"; then
+        log "        ✓ marketing pack ready in $BOOK_DIR/marketing"
+    else
+        log "        ⚠️  Marketing pack incomplete — read the messages above"
+    fi
+else
+    log "⏭️  [5/5] Marketing pack skipped (pass --marketing to build it)"
 fi
 
 DURATION=$(( $(date +%s) - START_EPOCH ))

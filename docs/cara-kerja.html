@@ -141,22 +141,25 @@
   <h2><span class="n">01</span> Alur kerja: dari topik ke EPUB</h2>
   <p>
     Semuanya dikendalikan satu skrip orkestrator, <code>scripts/generate_book.sh</code>, yang menjalankan
-    6 langkah berurutan. Setiap langkah menulis file nyata ke disk, jadi Anda bisa berhenti, memeriksa,
-    mengedit, lalu melanjutkan tanpa mengulang dari nol.
+    7 langkah berurutan. Setiap langkah menulis file nyata ke disk, jadi Anda bisa berhenti, memeriksa,
+    mengedit, lalu melanjutkan tanpa mengulang dari nol. Langkah ke-7 (paket pemasaran KDP) hanya jalan
+    kalau Anda meminta <code>--marketing</code>.
   </p>
 
   <div class="pipe">
-    <div class="step"><div class="num">[1/6]</div><div class="ttl">Outline</div><div class="out">outline.md</div></div>
+    <div class="step"><div class="num">[1/7]</div><div class="ttl">Outline</div><div class="out">outline.md</div></div>
     <div class="arrow">→</div>
-    <div class="step"><div class="num">[2/6]</div><div class="ttl">Tulis bab</div><div class="out">chapter_01.md … chapter_NN.md</div></div>
+    <div class="step"><div class="num">[2/7]</div><div class="ttl">Tulis bab</div><div class="out">chapter_01.md … chapter_NN.md</div></div>
     <div class="arrow">→</div>
-    <div class="step"><div class="num">[3/6]</div><div class="ttl">Appendices</div><div class="out">preface, glossary, epilogue…</div></div>
+    <div class="step"><div class="num">[3/7]</div><div class="ttl">Appendices</div><div class="out">preface, glossary, epilogue…</div></div>
     <div class="arrow">→</div>
-    <div class="step"><div class="num">[4/6]</div><div class="ttl">Bibliografi</div><div class="out">final_bibliography.md</div></div>
+    <div class="step"><div class="num">[4/7]</div><div class="ttl">Bibliografi</div><div class="out">final_bibliography.md</div></div>
     <div class="arrow">→</div>
-    <div class="step"><div class="num">[5/6]</div><div class="ttl">Cek orisinalitas</div><div class="out">skor per bab → laporan</div></div>
+    <div class="step"><div class="num">[5/7]</div><div class="ttl">Cek orisinalitas</div><div class="out">skor per bab → laporan</div></div>
     <div class="arrow">→</div>
-    <div class="step"><div class="num">[6/6]</div><div class="ttl">Compile</div><div class="out">EPUB · HTML · MD · (PDF)</div></div>
+    <div class="step"><div class="num">[6/7]</div><div class="ttl">Compile</div><div class="out">EPUB · HTML · MD · (PDF)</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="num">[7/7]</div><div class="ttl">Marketing pack</div><div class="out">deskripsi · 7 keyword · kategori</div></div>
   </div>
 
   <h3>Yang terjadi di setiap langkah</h3>
@@ -460,9 +463,61 @@
   </div>
 </section>
 
-<!-- ══════════════ 7. GAMBAR ══════════════ -->
+<!-- ══════════════ 7. PEMASARAN ══════════════ -->
+<section id="pemasaran">
+  <h2><span class="n">07</span> Paket pemasaran KDP: deskripsi, keyword, kategori</h2>
+  <p>
+    Sampai v1.6.0, ada satu lubang antara “buku selesai” dan “buku terbit”: Anda harus menulis sendiri
+    deskripsi jualan, memilih 7 keyword, dan menentukan 3 kategori di KDP. Sekarang itu dihasilkan
+    <code>scripts/generate_marketing_copy.sh</code> ke dalam folder <code>&lt;buku&gt;/marketing/</code>.
+  </p>
+
+  <table>
+    <thead><tr><th>Berkas</th><th>Isi</th></tr></thead>
+    <tbody>
+      <tr><td><code>description.html</code></td><td>Deskripsi KDP, siap tempel ke tampilan <em>Source/HTML</em></td></tr>
+      <tr><td><code>description.txt</code></td><td>Versi tanpa tag HTML — untuk blog, email, siaran pers</td></tr>
+      <tr><td><code>keywords.txt</code></td><td>Tepat 7 frasa keyword, satu per baris</td></tr>
+      <tr><td><code>categories.md</code></td><td>3 usulan kategori Amazon lengkap dengan jalurnya</td></tr>
+      <tr><td><code>social_copy.md</code></td><td>Blurb pendek, thread, email peluncuran, bio penulis</td></tr>
+      <tr><td><code>kdp_listing.md</code></td><td>Semuanya dalam satu lembar + laporan validasi</td></tr>
+    </tbody>
+  </table>
+
+  <pre><span class="c"># bangun paketnya</span>
+./scripts/generate_marketing_copy.sh v3/&lt;folder-buku&gt;
+
+<span class="c"># periksa saja (tanpa AI, tanpa internet) — keluar dengan status ≠0 kalau ada yang ditolak KDP</span>
+./scripts/generate_marketing_copy.sh v3/&lt;folder-buku&gt; --check
+
+<span class="c"># atau jalankan sebagai langkah terakhir pipeline</span>
+./scripts/generate_book.sh --topic <span class="s">"Topik Anda"</span> --chapters 8 --marketing</pre>
+
+  <h3>Aturan KDP yang ditegakkan, bukan sekadar disarankan</h3>
+  <ul>
+    <li><strong>4.000 karakter termasuk tag HTML</strong> — deskripsi yang kepanjangan dipotong di batas kalimat, tidak pernah dibiarkan melewati batas. Tag yang tidak dikenal dibuka (tag dibuang, teksnya tetap ada), atribut gaya dibuang.</li>
+    <li><strong>Emoji dilarang KDP</strong> — dibuang otomatis sebelum Anda menempelkannya, huruf beraksen seperti <em>café</em> tetap aman.</li>
+    <li><strong>7 kolom keyword × 50 karakter</strong> — dipotong di batas kata, duplikat dibuang, dan urutan “paling penting dulu” dari model dipertahankan.</li>
+    <li><strong>3 kategori</strong> — disertakan jalur lengkap supaya mudah dipilih di KDP.</li>
+  </ul>
+
+  <div class="note">
+    <p><strong>Yang diperingatkan sebagai pemborosan ruang:</strong> kata yang muncul di dua kolom keyword
+    (Amazon hanya mengindeks sekali), frasa yang mengulang kata di judul (sudah terindeks), satu kolom yang
+    hanya berisi satu kata pendek padahal muat frasa 50 karakter, dan deskripsi yang mengulang sebuah keyword
+    tiga kali atau lebih (bau <em>keyword stuffing</em> yang bisa ditolak KDP).</p>
+  </div>
+
+  <div class="note warn">
+    <p><strong>Batas jujurnya:</strong> Amazon tidak menyediakan API publik untuk mengunggah buku, jadi
+    langkah terakhir tetap manual — buka KDP, tempel deskripsi, isi 7 keyword, pilih 3 kategori. Yang bisa
+    diotomasi adalah menyiapkan isinya dan memastikan isinya tidak akan ditolak.</p>
+  </div>
+</section>
+
+<!-- ══════════════ 8. GAMBAR ══════════════ -->
 <section id="gambar">
-  <h2><span class="n">07</span> Gambar: sampul &amp; ilustrasi bab, gratis dulu</h2>
+  <h2><span class="n">08</span> Gambar: sampul &amp; ilustrasi bab, gratis dulu</h2>
   <p>
     Anda benar soal <strong>Pollinations</strong>: itu memang layanan gambar gratis tanpa API key, tanpa daftar, dan
     praktis tanpa batas untuk pemakaian wajar. Jadi <strong>tidak wajib</strong> memakai model gambar berbayar.
@@ -511,9 +566,9 @@
   </div>
 </section>
 
-<!-- ══════════════ 8. MULAI ══════════════ -->
+<!-- ══════════════ 9. MULAI ══════════════ -->
 <section id="mulai">
-  <h2><span class="n">08</span> Mulai cepat (urutan yang saya sarankan)</h2>
+  <h2><span class="n">09</span> Mulai cepat (urutan yang saya sarankan)</h2>
   <pre><span class="c"># 0. Prasyarat &amp; key</span>
 brew install pandoc imagemagick jq        <span class="c"># + texlive untuk PDF, calibre untuk MOBI</span>
 <span class="k">export</span> GEMINI_API_KEY=<span class="s">"..."</span>                <span class="c"># atau ANTHROPIC_API_KEY / CUSTOM_API_* / Ollama lokal</span>
@@ -537,7 +592,10 @@ brew install pandoc imagemagick jq        <span class="c"># + texlive untuk PDF,
   --generate-cover --illustrate --isbn <span class="s">"978-…"</span>
 
 <span class="c">#    atau pakai sampul buatan sendiri kalau sudah punya:</span>
-<span class="c">#    ./scripts/compile_book.sh v3/&lt;folder-buku&gt; all 1 --cover cover.png --author-photo foto.png</span></pre>
+<span class="c">#    ./scripts/compile_book.sh v3/&lt;folder-buku&gt; all 1 --cover cover.png --author-photo foto.png</span>
+
+<span class="c"># 5. Sebelum unggah ke KDP: deskripsi, 7 keyword, kategori</span>
+./scripts/generate_marketing_copy.sh v3/&lt;folder-buku&gt; --check</pre>
 
   <div class="note">
     <p><strong>Catatan lingkungan:</strong> skrip sekarang memuat <code>.env</code> otomatis (lihat
@@ -547,9 +605,9 @@ brew install pandoc imagemagick jq        <span class="c"># + texlive untuk PDF,
 </section>
 
 <footer>
-  <p>Dokumen ini merangkum keadaan repo pada rilis <code>v1.6.0</code> (branch <code>arena/1b3521bd-book-generator</code>):
-  6 putaran perbaikan — compile stage, lapisan AI, provider custom, aset artwork, mode agent, dan gambar gratis —
-  dengan 47 tes otomatis lulus.</p>
+  <p>Dokumen ini merangkum keadaan repo pada rilis <code>v1.7.0</code> (branch <code>arena/1b3521bd-book-generator</code>):
+  7 putaran perbaikan — compile stage, lapisan AI, provider custom, aset artwork, mode agent, gambar gratis,
+  dan paket pemasaran KDP — dengan 65 tes otomatis lulus.</p>
   <p>Semua angka di halaman ini berasal dari eksekusi nyata di sandbox: stub provider offline, verifikasi isi EPUB,
   dan pemeriksaan payload yang benar-benar dikirim ke endpoint.</p>
 </footer>

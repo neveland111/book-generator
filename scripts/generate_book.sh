@@ -27,6 +27,7 @@ SKIP_COMPILE=false
 ILLUSTRATE="${ILLUSTRATE:-false}"
 GENERATE_COVER="${GENERATE_COVER:-}"
 IMAGE_PROVIDER="${IMAGE_PROVIDER:-}"
+MARKETING=false
 QUIET=false
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -61,6 +62,8 @@ Options:
   --generate-cover        Generate cover art only
   --illustrate            Generate one illustration per chapter only
   --image-provider NAME   auto | pollinations | a1111 | openai | custom | none
+  --marketing             Also build the KDP marketing pack (description, 7 keywords,
+                          categories, social copy) after compiling
   --quiet                 Suppress progress output (errors still shown)
   --help                  Show this message and exit
 
@@ -118,6 +121,7 @@ while [[ $# -gt 0 ]]; do
         --illustrate)        ILLUSTRATE=true;         shift ;;
         --generate-cover)    GENERATE_COVER=true;     shift ;;
         --image-provider)    IMAGE_PROVIDER="$2";     shift 2 ;;
+        --marketing)         MARKETING=true;          shift ;;
         --quiet)             QUIET=true;              shift ;;
         --help|-h)           usage; exit 0 ;;
         *)                   die "Unknown option: $1  (run --help for usage)" ;;
@@ -181,8 +185,8 @@ log "   Words/ch:    $WORDS_PER_CHAPTER"
 log "   Output:      $BOOK_DIR"
 log ""
 
-# ── [1/6] Outline ─────────────────────────────────────────────────────────────
-log "📋 [1/6] Generating outline..."
+# ── [1/7] Outline ─────────────────────────────────────────────────────────────
+log "📋 [1/7] Generating outline..."
 OUTLINE_FILE="$BOOK_DIR/outline.md"
 
 OUTLINE_CONTENT=$(generate_outline_with_smart_api \
@@ -214,8 +218,8 @@ fi
 ACTUAL_CHAPTERS=${#CHAPTER_LINES[@]}
 log "        Parsed $ACTUAL_CHAPTERS chapters"
 
-# ── [2/6] Chapters ────────────────────────────────────────────────────────────
-log "✍️  [2/6] Writing $ACTUAL_CHAPTERS chapters..."
+# ── [2/7] Chapters ────────────────────────────────────────────────────────────
+log "✍️  [2/7] Writing $ACTUAL_CHAPTERS chapters..."
 EXISTING_CHAPTERS=""
 MIN_WORDS=$WORDS_PER_CHAPTER
 MAX_WORDS=$((WORDS_PER_CHAPTER + 1000))
@@ -295,32 +299,32 @@ else
     log "        ✓ All $ACTUAL_CHAPTERS chapters written"
 fi
 
-# ── [3/6] Appendices ──────────────────────────────────────────────────────────
+# ── [3/7] Appendices ──────────────────────────────────────────────────────────
 if [[ "$SKIP_APPENDICES" = false && -n "${GEMINI_API_KEY:-}" ]]; then
-    log "📑 [3/6] Generating appendices..."
+    log "📑 [3/7] Generating appendices..."
     if bash "$SCRIPT_DIR/generate_appendices.sh" "$BOOK_DIR"; then
         log "        ✓ Appendices complete"
     else
         log "        ⚠️  Appendix generation failed — continuing without appendices"
     fi
 else
-    log "⏭️  [3/6] Appendices skipped"
+    log "⏭️  [3/7] Appendices skipped"
 fi
 
-# ── [4/6] References ──────────────────────────────────────────────────────────
+# ── [4/7] References ──────────────────────────────────────────────────────────
 if [[ "$SKIP_REFERENCES" = false && -n "${GEMINI_API_KEY:-}" ]]; then
-    log "📚 [4/6] Generating bibliography..."
+    log "📚 [4/7] Generating bibliography..."
     if bash "$SCRIPT_DIR/generate_references.sh" "$BOOK_DIR"; then
         log "        ✓ Bibliography complete"
     else
         log "        ⚠️  Bibliography generation failed — continuing without references"
     fi
 else
-    log "⏭️  [4/6] Bibliography skipped"
+    log "⏭️  [4/7] Bibliography skipped"
 fi
 
-# ── [5/6] Originality check ───────────────────────────────────────────────────
-log "🔍 [5/6] Originality checks..."
+# ── [5/7] Originality check ───────────────────────────────────────────────────
+log "🔍 [5/7] Originality checks..."
 flagged=0
 for chapter_file in "$BOOK_DIR"/chapter_*.md; do
     [[ -f "$chapter_file" ]] || continue
@@ -341,9 +345,9 @@ else
     log "        ⚠️  $flagged chapter(s) flagged for review"
 fi
 
-# ── [6/6] Compile ─────────────────────────────────────────────────────────────
+# ── [6/7] Compile ─────────────────────────────────────────────────────────────
 if [[ "$SKIP_COMPILE" = false ]]; then
-    log "📦 [6/6] Compiling book..."
+    log "📦 [6/7] Compiling book..."
     COMPILE_OPTS=()
     [[ -n "$PEN_NAME" ]] && COMPILE_OPTS+=(--author "$PEN_NAME")
     [[ "$GENERATE_COVER" == true ]] && COMPILE_OPTS+=(--generate-cover)
@@ -359,7 +363,20 @@ if [[ "$SKIP_COMPILE" = false ]]; then
         log "        ⚠️  Compilation failed — raw chapters are available in $BOOK_DIR"
     fi
 else
-    log "⏭️  [6/6] Compilation skipped"
+    log "⏭️  [6/7] Compilation skipped"
+fi
+
+# ── [7/7] Marketing pack ──────────────────────────────────────────────────────
+if [[ "$MARKETING" = true ]]; then
+    log "📣 [7/7] Building the KDP marketing pack..."
+    if bash "$SCRIPT_DIR/generate_marketing_copy.sh" "$BOOK_DIR"; then
+        log "        ✓ marketing pack ready in $BOOK_DIR/marketing"
+        log "          (description, 7 keywords, 3 categories, social copy)"
+    else
+        log "        ⚠️  Marketing pack incomplete — read the messages above"
+    fi
+else
+    log "⏭️  [7/7] Marketing pack skipped (pass --marketing to build it)"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
@@ -370,4 +387,5 @@ log "   📋 outline.md  ($ACTUAL_CHAPTERS chapters)"
 log ""
 log "To compile manually:"
 log "   ./scripts/compile_book.sh \"$BOOK_DIR\" all 1"
+log "   ./scripts/generate_marketing_copy.sh \"$BOOK_DIR\"   # KDP description, keywords, categories"
 exit 0

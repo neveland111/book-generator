@@ -5,6 +5,46 @@ All notable changes to Book Generator will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-10-13
+
+### Added — `scripts/generate_marketing_copy.sh`: the KDP marketing pack
+The last manual step between "finished book" and "published listing" now has a
+generator. It reads the book folder and writes `<book_dir>/marketing/`:
+
+- `description.html` — the KDP description, ready to paste into the Source view
+- `description.txt` — the same copy with the HTML stripped
+- `keywords.txt` — exactly 7 keyword phrases, one per line
+- `categories.md` — 3 suggested Amazon browse categories with full paths
+- `social_copy.md` — short blurbs, a post thread, a launch email, an author bio
+- `kdp_listing.md` — everything in one sheet, with the validation report
+
+The KDP rules are enforced, not just suggested: **4,000 characters including
+HTML tags** for the description, **no unicode emojis**, **7 keyword fields of 50
+characters**, **up to 3 categories**. Unknown HTML tags are unwrapped, attributes
+are dropped, and a description that comes back too long is trimmed at a sentence
+boundary — never left over the limit. The generator also warns about wasted
+keyword space: a word repeated across fields (Amazon indexes it once), a phrase
+that repeats the title (already indexed), a field holding a single short word
+instead of a 50-character phrase, and description copy that repeats a keyword
+three or more times.
+
+`--check` re-validates an existing `marketing/` folder and exits non-zero on
+anything KDP would reject. It never touches the network, so it runs offline and
+in CI.
+
+New flags: `--marketing` on `generate_book.sh` (now a 7-step pipeline) and on
+`agent_book.sh` (now 5 steps), which run the pack as the final step.
+
+### Fixed
+- `mc_count_lines`: `grep -c` prints `0` *and* exits non-zero when nothing
+  matches, so the usual `|| echo 0` produced `"0\n0"` and broke every numeric
+  comparison in the validators.
+- Keyword de-duplication used `sort -u`, which silently destroyed the ranking
+  the model was asked to produce (best keyword first). Order is now preserved.
+
+Tests: 65 passing (18 new for the marketing layer, driven by an exported `curl`
+stub so the whole chain runs offline).
+
 ## [1.6.0] - 2026-10-13
 
 ### Added — free-first image generation (`scripts/image_gen.sh`)

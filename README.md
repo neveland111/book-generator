@@ -345,6 +345,46 @@ IMAGE_PROVIDER=openai         # paid, any OpenAI-compatible endpoint
 IMAGE_PROVIDER=none           # never generate images
 ```
 
+📣 Marketing Pack — Description, Keywords, Categories
+---------------------------------------------------
+
+`scripts/generate_marketing_copy.sh` turns a finished book folder into a
+KDP-ready listing. It reads `outline.md`, the chapters and (when present)
+`metadata.yaml`, then writes `<book_dir>/marketing/`:
+
+```bash
+./scripts/generate_marketing_copy.sh ./v3/my-book          # build the pack
+./scripts/generate_marketing_copy.sh ./v3/my-book --check   # validate it, offline
+./scripts/generate_book.sh --topic "..." --chapters 8 --marketing   # as the last pipeline step
+```
+
+| File | What it is |
+|------|------------|
+| `description.html` | The KDP description, ready to paste into the Source/HTML view |
+| `description.txt` | The same copy with the tags stripped (blogs, email, press) |
+| `keywords.txt` | Exactly 7 keyword phrases, one per line — fill all 7 KDP fields |
+| `categories.md` | 3 suggested browse categories, as full paths |
+| `social_copy.md` | Short blurbs, a post thread, a launch email, an author bio |
+| `kdp_listing.md` | Everything in one sheet, plus the validation report |
+
+**The KDP rules are enforced, not just suggested.** Amazon allows 4,000
+characters for the description *including* HTML tags, rejects unicode emojis,
+gives 7 keyword fields of 50 characters each, and up to 3 categories. So:
+
+- Emojis are stripped, unknown tags are unwrapped, attributes are dropped.
+- A description that comes back too long is trimmed at a sentence boundary and
+  never left above the limit; a short one is flagged.
+- Keywords are cut to 50 characters at a word boundary, de-duplicated, and the
+  best-first order the model chose is preserved.
+- Wasted keyword space is reported: a word shared by two fields (Amazon indexes
+  it once), a phrase repeating the title (already indexed), a field holding one
+  short word where a 50-character phrase would fit.
+- Keyword stuffing in the description — a keyword repeated 3+ times — is flagged.
+
+`--check` prints the numbers (`883 / 4000 characters`, `7 / 7 fields`,
+`3 / 3 paths`) and exits non-zero on anything KDP would reject. It makes no
+network calls, so it works offline and in CI.
+
 📦 Output Layout
 -------------
 When compilation completes an `exports_<TIMESTAMP>/` directory will be created
