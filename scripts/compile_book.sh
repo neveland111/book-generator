@@ -9,6 +9,16 @@ set -e
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Image generation (covers, illustrations). Optional: the script still works
+# without it, it just cannot generate artwork.
+if [ -f "$SCRIPT_DIR/image_gen.sh" ]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/image_gen.sh"
+    IMAGE_GEN_AVAILABLE=true
+else
+    IMAGE_GEN_AVAILABLE=false
+fi
+
 # Check for required tools
 check_requirements() {
     local missing_tools=()
@@ -86,6 +96,9 @@ OPTIONS:
     --publisher "name" - Set publisher name
     --year "YYYY"     - Publication year (default: current year)
     --generate-cover  - Auto-generate a simple cover if none provided
+    --illustrate      - Generate one AI illustration per chapter (optional)
+    --cover-prompt "text"  - Art direction for the generated cover
+    --image-provider NAME  - auto|pollinations|a1111|openai|custom|none
     --author-photo "path" - Photo for the About the Author page (optional)
     --logo "path"     - Publisher logo shown on the copyright page (optional)
     --icon "path"     - Small decorative image for the front matter (optional)
@@ -120,6 +133,7 @@ ISBN=""
 PUBLISHER="Speedy Quick Publishing"
 PUBLICATION_YEAR=$(date +"%Y")
 GENERATE_COVER=false
+ILLUSTRATE=false
 ATTACH_COVER=false
 
 # Function to generate book metadata
@@ -166,6 +180,28 @@ EOF
 }
 
 # Function to generate a book cover using Ollama or ImageMagick
+# Try to produce a front cover image with the image provider chain (free first:
+# Pollinations -> local Stable Diffusion -> OpenAI-compatible images API). Falls
+# back to the ImageMagick typography cover when no provider yields an image.
+try_generate_cover_image() {
+    local title="$1" output_dir="$2"
+
+    if [ "$IMAGE_GEN_AVAILABLE" = true ] && [ "${IMAGE_PROVIDER:-auto}" != "none" ]; then
+        local subtitle=""
+        [ -f "$EXPORTS_DIR/../outline.md" ] && subtitle=$(head -n 2 "$BOOK_DIR/outline.md" 2>/dev/null | tail -n 1 | sed 's/^## //')
+        local ai_cover="${output_dir}/generated_cover_front.jpg"
+
+        echo "🎨 Generating cover artwork (provider chain: $(image_provider_order))..."
+        if generate_ai_cover "$title" "$subtitle" "$AUTHOR" "$ai_cover" 1600 2560; then
+            echo "   ✅ Cover artwork ready: $(basename "$ai_cover")"
+            return 0
+        fi
+        echo "   ⚠️  No image provider produced artwork — falling back to the ImageMagick cover"
+    fi
+
+    generate_book_cover "$title" "$output_dir"
+}
+
 generate_book_cover() {
     local title="$1"
     local output_dir="$2"
@@ -204,9 +240,9 @@ generate_book_cover() {
 
     echo "🎨 Creating simple black and white book covers with ImageMagick..."
     
-    # Check for publisher logo
-    local logo_path="$SCRIPT_DIR/speedy-quick-publishing-logo.png"
-    local logo_exports_path="${assets_dir}/speedy-quick-publishing-logo.png"
+    # Publisher logo — only when the user supplied one (never the repo's sample)
+    local logo_path="${LOGO_SRC:-${PUBLISHER_LOGO:-}}"
+    local logo_exports_path="${assets_dir}/publisher-logo.png"
     
     if [ -f "$logo_path" ]; then
         # Copy logo to exports directory
@@ -224,8 +260,8 @@ generate_book_cover() {
         fi
     fi
 
-    # Check for author photo
-    local author_photo_path="$SCRIPT_DIR/author-photo.png"
+    # Author photo — only when the user supplied one
+    local author_photo_path="${AUTHOR_PHOTO_SRC:-${AUTHOR_PHOTO:-}}"
     local author_photo_exports_path="${assets_dir}/author-photo.png"
 
     if [ -f "$author_photo_path" ]; then
@@ -517,6 +553,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --generate-cover)
             GENERATE_COVER=true
+            shift
+            ;;
+        --cover-prompt)
+            IMAGE_STYLE="$2"
+            shift 2
+            ;;
+        --image-provider)
+            IMAGE_PROVIDER="$2"
+            shift 2
+            ;;
+        --illustrate)
+            ILLUSTRATE=true
             shift
             ;;
         --add-cover)
@@ -853,11 +901,23 @@ elif [ "$GENERATE_COVER" = true ]; then
             cp "$COVER_IMAGE" "$EXPORTS_DIR/$(basename "$COVER_IMAGE")"
             COVER_IMAGE="$EXPORTS_DIR/$(basename "$COVER_IMAGE")"
         else
-            echo "⚠️ AI cover selection failed or was skipped; falling back to ImageMagick cover generation"
-            generate_book_cover "$BOOK_TITLE" "$EXPORTS_DIR"
+            echo "⚠️ AI cover selection failed or was skipped; falling back to the free provider chain"
+            try_generate_cover_image "$BOOK_TITLE" "$EXPORTS_DIR" || true
         fi
     else
-        generate_book_cover "$BOOK_TITLE" "$EXPORTS_DIR"
+        # No OpenAI key: the free-first provider chain runs instead
+        try_generate_cover_image "$BOOK_TITLE" "$EXPORTS_DIR" || true
+    fi
+
+    # Whatever produced the artwork, actually use it — COVER_IMAGE used to stay
+    # empty here, so a freshly generated cover was thrown away and the EPUB was
+    # built with no cover at all ("No valid cover image found").
+    if [ -z "$COVER_IMAGE" ] && [ -f "$EXPORTS_DIR/generated_cover_front.jpg" ]; then
+        COVER_IMAGE="$EXPORTS_DIR/generated_cover_front.jpg"
+        echo "🖼️  Using generated cover: $(basename "$COVER_IMAGE")"
+    fi
+    if [ -z "${BACK_COVER_IMAGE:-}" ] && [ -f "$EXPORTS_DIR/generated_cover_back.jpg" ]; then
+        BACK_COVER_IMAGE="$EXPORTS_DIR/generated_cover_back.jpg"
     fi
 fi
 
@@ -1088,6 +1148,25 @@ for CHAPTER_FILE in "${CHAPTER_FILES[@]}"; do
         echo "## $CLEAN_CHAPTER_TITLE {.chapter-main-title}" >> "$MANUSCRIPT_FILE"
     fi
     echo "" >> "$MANUSCRIPT_FILE"
+
+    # Optional per-chapter illustration (opt-in with --illustrate)
+    if [ "$ILLUSTRATE" = true ] && [ "$IMAGE_GEN_AVAILABLE" = true ] && [ "${IMAGE_PROVIDER:-auto}" != "none" ]; then
+        ILLUS_FILE="illustration_${CHAPTER_NUM}.png"
+        if [ ! -f "$EXPORTS_DIR/$ILLUS_FILE" ]; then
+            ILLUS_SUBJECT="a scene evoking \"${CLEAN_CHAPTER_TITLE:-$DISPLAY_TITLE}\" in a book titled \"${BOOK_TITLE}\""
+            if generate_image "$(build_illustration_prompt "$ILLUS_SUBJECT")" "$EXPORTS_DIR/$ILLUS_FILE" 1024 768; then
+                echo "   🖼️  illustration for chapter $CHAPTER_NUM ready"
+            else
+                echo "   ⚠️  illustration for chapter $CHAPTER_NUM could not be generated"
+                ILLUS_FILE=""
+            fi
+        fi
+        if [ -n "$ILLUS_FILE" ] && [ -f "$EXPORTS_DIR/$ILLUS_FILE" ]; then
+            echo "" >> "$MANUSCRIPT_FILE"
+            echo "![]($ILLUS_FILE){width=100%}" >> "$MANUSCRIPT_FILE"
+            echo "" >> "$MANUSCRIPT_FILE"
+        fi
+    fi
 
     # Process chapter content and clean it, but remove heading lines so we don't duplicate titles
     CHAPTER_CONTENT=$(cat "$CHAPTER_FILE")
@@ -1760,10 +1839,10 @@ generate_ebook_format() {
 
             # Run pandoc from the output directory so image paths resolve correctly. Use --toc and set chapter level
             (cd "$output_dir" && {
-                if [ -n "$cover_basename" ]; then
+                if [ -n "$cover_basename" ] && [ -f "$cover_basename" ]; then
                     if [ -n "$back_md" ]; then
                         pandoc -f markdown -t epub3 \
-                            --epub-cover-image="$COVER1_BASENAME" \
+                            --epub-cover-image="$cover_basename" \
                             --css="$css_basename" \
                             --metadata-file="$metadata_basename" \
                             --toc --toc-depth=2 --resource-path=. \
@@ -1771,7 +1850,7 @@ generate_ebook_format() {
                             --split-level=1 -o "$(basename "$output_file")" "$input_basename"
                     else
                         pandoc -f markdown -t epub3 \
-                            --epub-cover-image="$COVER1_BASENAME" \
+                            --epub-cover-image="$cover_basename" \
                             --css="$css_basename" \
                             --metadata-file="$metadata_basename" \
                             --toc --toc-depth=2 --resource-path=. \
@@ -2067,8 +2146,11 @@ echo "📚 Exporting book in requested formats..."
 # Set default cover if none provided
 if [ -z "$COVER_IMAGE" ]; then
     if [ "$GENERATE_COVER" = true ]; then
-        # Generate both front and back covers and set COVER_IMAGE/BACK_COVER
-        generate_book_cover "$BOOK_TITLE" "$EXPORTS_DIR" || true
+        # Generate front/back covers and set COVER_IMAGE
+        try_generate_cover_image "$BOOK_TITLE" "$EXPORTS_DIR" || true
+        if [ -f "$EXPORTS_DIR/generated_cover_front.jpg" ]; then
+            COVER_IMAGE="$EXPORTS_DIR/generated_cover_front.jpg"
+        fi
     else
         # Only set COVER_IMAGE if the file actually exists
         if [ -f "$EXPORTS_DIR/generated_cover_front.jpg" ]; then

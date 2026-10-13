@@ -460,9 +460,60 @@
   </div>
 </section>
 
-<!-- ══════════════ 7. MULAI ══════════════ -->
+<!-- ══════════════ 7. GAMBAR ══════════════ -->
+<section id="gambar">
+  <h2><span class="n">07</span> Gambar: sampul &amp; ilustrasi bab, gratis dulu</h2>
+  <p>
+    Anda benar soal <strong>Pollinations</strong>: itu memang layanan gambar gratis tanpa API key, tanpa daftar, dan
+    praktis tanpa batas untuk pemakaian wajar. Jadi <strong>tidak wajib</strong> memakai model gambar berbayar.
+    Pipeline sekarang mencoba penyedia secara berurutan dan memakai yang pertama berhasil:
+  </p>
+
+  <table>
+    <thead><tr><th>#</th><th>Penyedia</th><th>Biaya</th><th>Syarat</th><th>Catatan</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><code>pollinations</code></td><td><strong>Gratis</strong></td><td>tidak ada</td>
+        <td>Pollinations.ai, default model <code>flux</code>. Tidak perlu key. <code>POLLINATIONS_TOKEN</code> opsional untuk limit lebih longgar.</td></tr>
+      <tr><td>2</td><td><code>a1111</code></td><td><strong>Gratis</strong></td><td>GPU sendiri</td>
+        <td>Stable Diffusion lokal (AUTOMATIC1111 / SD.Next dengan <code>--api</code>). Tanpa kuota, tanpa internet.</td></tr>
+      <tr><td>3</td><td><code>openai</code></td><td>Berbayar</td><td>API key</td>
+        <td>Endpoint <code>/images/generations</code> apa pun yang kompatibel OpenAI. Dipakai <em>hanya</em> kalau key diisi.</td></tr>
+    </tbody>
+  </table>
+
+  <pre><span class="c"># lihat penyedia mana yang aktif di mesin Anda</span>
+./scripts/image_gen.sh status
+./scripts/image_gen.sh test      <span class="c"># uji semua penyedia, cetak ✅/❌ per penyedia</span>
+
+<span class="c"># kompilasi dengan sampul AI + satu ilustrasi per bab</span>
+./scripts/compile_book.sh v3/&lt;folder-buku&gt; all 1 --generate-cover --illustrate
+
+<span class="c"># seluruh pipeline sekaligus (topik → bab → buku bergambar)</span>
+./scripts/generate_book.sh --topic <span class="s">"Topik Anda"</span> --images
+
+<span class="c"># ganti penyedia cukup satu variabel</span>
+<span class="k">export</span> IMAGE_PROVIDER=pollinations   <span class="c"># gratis (default di mode auto)</span>
+<span class="k">export</span> IMAGE_PROVIDER=a1111          <span class="c"># Stable Diffusion lokal</span>
+<span class="k">export</span> IMAGE_PROVIDER=none           <span class="c"># matikan gambar sepenuhnya</span></pre>
+
+  <h3>Kenapa sampul dibuat dua langkah</h3>
+  <p>
+    Model difusi masih sering salah menulis huruf, jadi model <em>hanya</em> melukis gambar tanpa teks
+    (prompt-nya tegas: “no text, no letters, no watermarks”, dan menyisakan ruang di sepertiga atas &amp; bawah).
+    Judul, subjudul, dan nama penulis baru ditempel oleh ImageMagick di atas pita transparan. Hasilnya teks selalu tajam
+    dan ejaannya benar — sesuatu yang tidak bisa dijamin kalau teks diminta langsung ke model gambar.
+  </p>
+
+  <div class="note">
+    <p><strong>Pengaman:</strong> file yang diunduh hanya diterima kalau lolos pemeriksaan <em>magic bytes</em> dan
+    berukuran wajar. Halaman error HTML (404/429) atau unduhan terpotong tidak akan pernah lolos jadi sampul buku Anda.
+    Kalau ImageMagick atau font tidak ada, gambar mentah tetap dipakai — kompilasi tidak gagal.</p>
+  </div>
+</section>
+
+<!-- ══════════════ 8. MULAI ══════════════ -->
 <section id="mulai">
-  <h2><span class="n">07</span> Mulai cepat (urutan yang saya sarankan)</h2>
+  <h2><span class="n">08</span> Mulai cepat (urutan yang saya sarankan)</h2>
   <pre><span class="c"># 0. Prasyarat &amp; key</span>
 brew install pandoc imagemagick jq        <span class="c"># + texlive untuk PDF, calibre untuk MOBI</span>
 <span class="k">export</span> GEMINI_API_KEY=<span class="s">"..."</span>                <span class="c"># atau ANTHROPIC_API_KEY / CUSTOM_API_* / Ollama lokal</span>
@@ -481,20 +532,24 @@ brew install pandoc imagemagick jq        <span class="c"># + texlive untuk PDF,
 
 <span class="c"># 4. Rapikan untuk terbit</span>
 <span class="c">#    - tulis author_bio.md di folder buku</span>
-<span class="c">#    - siapkan cover 1600×2560</span>
+<span class="c">#    - butuh sampul? biarkan pipeline membuatnya (gratis lewat Pollinations)</span>
 ./scripts/compile_book.sh v3/&lt;folder-buku&gt; all 1 --author <span class="s">"Nama Anda"</span> \
-  --cover cover.png --author-photo foto.png --isbn <span class="s">"978-…"</span></pre>
+  --generate-cover --illustrate --isbn <span class="s">"978-…"</span>
 
-  <div class="note warn">
-    <p><strong>Catatan lingkungan:</strong> skrip tidak memuat file <code>.env</code> sendiri — Anda perlu
-    <code>set -a; source .env; set +a</code> (atau <code>export</code> manual) sebelum menjalankannya.
-    Kalau mau, saya bisa tambahkan pemuatan <code>.env</code> otomatis.</p>
+<span class="c">#    atau pakai sampul buatan sendiri kalau sudah punya:</span>
+<span class="c">#    ./scripts/compile_book.sh v3/&lt;folder-buku&gt; all 1 --cover cover.png --author-photo foto.png</span></pre>
+
+  <div class="note">
+    <p><strong>Catatan lingkungan:</strong> skrip sekarang memuat <code>.env</code> otomatis (lihat
+    <code>.env.example</code> untuk daftar variabelnya, termasuk blok gambar). Tidak perlu
+    <code>source .env</code> manual lagi — tapi <code>export</code> manual tetap menang kalau Anda mau menimpanya.</p>
   </div>
 </section>
 
 <footer>
-  <p>Dokumen ini merangkum keadaan repo pada commit <code>a9f128a</code> (branch <code>arena/1b3521bd-book-generator</code>):
-  4 putaran perbaikan — compile stage, lapisan AI, provider custom, dan aset artwork — dengan 26 tes otomatis lulus.</p>
+  <p>Dokumen ini merangkum keadaan repo pada rilis <code>v1.6.0</code> (branch <code>arena/1b3521bd-book-generator</code>):
+  6 putaran perbaikan — compile stage, lapisan AI, provider custom, aset artwork, mode agent, dan gambar gratis —
+  dengan 47 tes otomatis lulus.</p>
   <p>Semua angka di halaman ini berasal dari eksekusi nyata di sandbox: stub provider offline, verifikasi isi EPUB,
   dan pemeriksaan payload yang benar-benar dikirim ke endpoint.</p>
 </footer>

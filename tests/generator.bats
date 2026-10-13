@@ -170,6 +170,51 @@ EOF
     rm -rf "$tmp_dir"
 }
 
+@test "a supplied cover ends up in the EPUB instead of the repo's cover-1.png" {
+    command -v pandoc || skip "pandoc not installed"
+    command -v convert || skip "imagemagick not installed"
+
+    tmp_dir=$(mktemp -d)
+    book_dir="$tmp_dir/cover-book"
+    mkdir -p "$book_dir"
+    cat > "$book_dir/outline.md" <<'EOF'
+# Cover Book
+
+### Chapter 1: One
+EOF
+    printf '# Chapter 1: One\n\nBody.\n' > "$book_dir/chapter_01.md"
+    convert -size 800x1280 xc:'#223355' "$tmp_dir/my-cover.png"
+
+    run ./scripts/compile_book.sh "$book_dir" epub 1 --author "Test Author" --cover "$tmp_dir/my-cover.png"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Using cover: my-cover.png"* ]]
+    [[ "$output" != *"openBinaryFile"* ]]
+
+    run bash -c "python3 - '$book_dir' <<'PY'
+import sys, glob, zipfile
+f = glob.glob(sys.argv[1] + '/exports_*/*.epub')[0]
+z = zipfile.ZipFile(f)
+opf = z.read('EPUB/content.opf').decode()
+media = [n for n in z.namelist() if '/media/' in n]
+print('cover-image' in opf, len(media) >= 1, 'cover-1.png' not in opf)
+PY"
+    [ "$output" = "True True True" ]
+
+    rm -rf "$tmp_dir"
+}
+
+@test "compile_book.sh never references the bundled cover-1.png" {
+    # The EPUB path used to pass the repository's own cover-1.png to pandoc,
+    # which both leaked sample artwork and broke the build with
+    # "openBinaryFile: does not exist" once that file stopped being copied.
+    run bash -c "grep -n 'COVER1_BASENAME' scripts/compile_book.sh || true"
+    [ -z "$output" ]
+
+    # and the EPUB branch must feed pandoc the cover it actually resolved
+    run bash -c "grep -c -- '--epub-cover-image=\"\$cover_basename\"' scripts/compile_book.sh"
+    [ "$output" = "2" ]
+}
+
 @test "compiled manuscript has no hardcoded placeholder content" {
     command -v pandoc || skip "pandoc not installed"
 

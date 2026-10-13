@@ -5,7 +5,30 @@ All notable changes to Book Generator will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.6.0] - 2026-10-13
+
+### Added — free-first image generation (`scripts/image_gen.sh`)
+- **Cover art and chapter illustrations without paying for anything.** The provider
+  chain tries, in order: **Pollinations.ai** (free, no API key, no signup) →
+  **local Stable Diffusion** (AUTOMATIC1111 / SD.Next with `--api`, free and
+  quota-less if you own a GPU) → any **OpenAI-compatible `/images/generations`**
+  endpoint (paid, used only when a key is configured).
+- `--generate-cover`, `--illustrate`, `--cover-prompt` and `--image-provider`
+  (on both `compile_book.sh` and `generate_book.sh`, which also gains `--images`).
+- Covers are composed in two steps: the model paints text-free artwork, ImageMagick
+  sets the title/subtitle/author over translucent bands. If ImageMagick or a usable
+  font is missing, the raw artwork is kept instead of failing the build.
+- Every downloaded file must pass an image signature check, so an HTML error page or
+  a truncated download can never ship as a cover.
+- `scripts/image_gen.sh status|test|cover|illustration|prompt` for manual use, and an
+  image block in `.env.example`.
+
+### Fixed
+- `COVER_IMAGE` was never assigned from the generated cover, so `--generate-cover`
+  produced artwork that the EPUB then ignored ("No valid cover image found").
+- The EPUB branch passed the repository's own `cover-1.png` to pandoc instead of the
+  resolved cover, which leaked sample artwork and aborted the build with
+  `openBinaryFile: does not exist`.
 
 ### Planned for v1.1
 - Enhanced editing workflow with AI revision suggestions

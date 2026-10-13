@@ -24,6 +24,9 @@ TARGET_AUDIENCE="general audience"
 SKIP_APPENDICES=false
 SKIP_REFERENCES=false
 SKIP_COMPILE=false
+ILLUSTRATE="${ILLUSTRATE:-false}"
+GENERATE_COVER="${GENERATE_COVER:-}"
+IMAGE_PROVIDER="${IMAGE_PROVIDER:-}"
 QUIET=false
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -54,6 +57,10 @@ Options:
   --skip-appendices       Skip appendix generation step
   --skip-references       Skip bibliography generation step
   --skip-compile          Skip final PDF/EPUB compilation
+  --images                Generate cover art + one illustration per chapter (free providers first)
+  --generate-cover        Generate cover art only
+  --illustrate            Generate one illustration per chapter only
+  --image-provider NAME   auto | pollinations | a1111 | openai | custom | none
   --quiet                 Suppress progress output (errors still shown)
   --help                  Show this message and exit
 
@@ -107,6 +114,10 @@ while [[ $# -gt 0 ]]; do
         --skip-appendices)   SKIP_APPENDICES=true;    shift ;;
         --skip-references)   SKIP_REFERENCES=true;    shift ;;
         --skip-compile)      SKIP_COMPILE=true;       shift ;;
+        --images)            ILLUSTRATE=true; GENERATE_COVER=true; shift ;;
+        --illustrate)        ILLUSTRATE=true;         shift ;;
+        --generate-cover)    GENERATE_COVER=true;     shift ;;
+        --image-provider)    IMAGE_PROVIDER="$2";     shift 2 ;;
         --quiet)             QUIET=true;              shift ;;
         --help|-h)           usage; exit 0 ;;
         *)                   die "Unknown option: $1  (run --help for usage)" ;;
@@ -335,6 +346,10 @@ if [[ "$SKIP_COMPILE" = false ]]; then
     log "📦 [6/6] Compiling book..."
     COMPILE_OPTS=()
     [[ -n "$PEN_NAME" ]] && COMPILE_OPTS+=(--author "$PEN_NAME")
+    [[ "$GENERATE_COVER" == true ]] && COMPILE_OPTS+=(--generate-cover)
+    [[ "$ILLUSTRATE" == true ]] && COMPILE_OPTS+=(--illustrate)
+    [[ -n "$IMAGE_PROVIDER" ]] && COMPILE_OPTS+=(--image-provider "$IMAGE_PROVIDER")
+    [[ -n "${COVER_PROMPT:-}" ]] && COMPILE_OPTS+=(--cover-prompt "$COVER_PROMPT")
 
     if bash "$SCRIPT_DIR/compile_book.sh" \
             "$BOOK_DIR" "all" "1" \
